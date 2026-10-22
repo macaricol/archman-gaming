@@ -14,8 +14,9 @@ phase_chroot() {
   configure_accounts "$password"
   configure_boot_splash
   configure_hibernation
-  # The initramfs again, with what the two above added: the splash's hook,
-  # NVIDIA's modules, the resume hook.
+  configure_gaming_system
+  # The initramfs again, with what the three above added: the splash's hook,
+  # NVIDIA's modules and their options, the resume hook.
   run mkinitcpio -P
   install_bootloader
   hand_over_to_user
@@ -70,7 +71,7 @@ configure_boot_splash() {
   # NVIDIA's driver has to be in the initramfs (early KMS), or the splash
   # only appears late or falls back to text. Intel/AMD get theirs from the
   # stock kms hook.
-  if pacman -Q nvidia-open &>/dev/null && ! grep -q '^MODULES=.*nvidia' /etc/mkinitcpio.conf; then
+  if pacman -Q nvidia-utils &>/dev/null && ! grep -q '^MODULES=.*nvidia' /etc/mkinitcpio.conf; then
     sed -i -E -e 's/^MODULES=\((.*)\)/MODULES=(\1 nvidia nvidia_modeset nvidia_uvm nvidia_drm)/' \
       -e 's/^MODULES=\( /MODULES=(/' /etc/mkinitcpio.conf
   fi

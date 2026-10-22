@@ -7,7 +7,7 @@
 # into the USB from config.sh when it's built.
 set -euo pipefail
 
-REPO=${REPO:-macaricol/arch}
+REPO=${REPO:-macaricol/archman-gaming}
 BRANCH=${BRANCH:-main}
 DEST=/tmp/arch-setup
 

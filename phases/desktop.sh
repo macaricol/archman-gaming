@@ -27,6 +27,7 @@ phase_desktop() {
   configure_mpv
   configure_audio
   configure_samba
+  configure_gaming_desktop
   share 700 1000
   # The desktop's layout and theme: applied the first time you log in.
   schedule_plasma_tweaks

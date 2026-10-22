@@ -2,7 +2,7 @@
 # Every user-tunable value lives here; the phases only read from this file.
 
 # ── Source repo (used by bootstrap.sh and the ISO builder) ──────────────
-REPO=${REPO:-macaricol/arch}
+REPO=${REPO:-macaricol/archman-gaming}
 BRANCH=${BRANCH:-main}
 
 # ── Install media (tools/build-autoinstall-iso.sh) ─────────────────────
@@ -62,7 +62,16 @@ EFI_SIZE='512M'
 BTRFS_MOUNT_OPTS='noatime,compress=zstd:1'
 
 # ── Packages ───────────────────────────────────────────────────────────
-BASE_PACKAGES=(base linux linux-firmware btrfs-progs grub efibootmgr nano networkmanager sudo plymouth pciutils)
+# Installed from CachyOS's repositories as well as Arch's (lib/gaming.sh's
+# add_cachyos_repos): every package they rebuild, for this CPU, comes from
+# them. Their kernel, linux-cachyos (BORE scheduler, built with LTO and
+# profile-guided optimisation), not the stock one; their keyring and mirror
+# lists, which keep the system on their repos; cachyos-settings, their
+# system tuning (zram, sysctls, I/O schedulers...); and the sched_ext CPU
+# schedulers with their loader.
+BASE_PACKAGES=(base linux-cachyos linux-firmware btrfs-progs grub efibootmgr nano networkmanager sudo plymouth pciutils
+               cachyos-keyring cachyos-mirrorlist cachyos-v3-mirrorlist cachyos-v4-mirrorlist cachyos-settings
+               scx-scheds scx-tools)
 
 KDE_PACKAGES=(
   plasma-desktop sddm sddm-kcm kscreen plasma-pa plasma-nm plasma-systemmonitor
@@ -79,7 +88,13 @@ EXTRA_PACKAGES=(
   matugen                         # skwd-wall's desktop colours, from the wallpaper
 )
 
-GAMING_PACKAGES=(steam)  # only installed when a supported GPU was detected, see desktop phase
+# Only installed when a supported GPU was detected, see desktop phase. Steam,
+# and for its games: Proton-CachyOS (CachyOS's Proton, built for Steam's
+# runtime; picked in Steam's Compatibility settings), GameMode
+# (gamemoderun %command%), MangoHud's overlay (mangohud %command%; Shift+F12
+# toggles it) and gamescope, Valve's compositor for one game (upscaling,
+# frame limits, HDR).
+GAMING_PACKAGES=(steam proton-cachyos-slr gamemode lib32-gamemode mangohud lib32-mangohud gamescope)
 # From the AUR, installed in this order. paru first, with makepkg (its
 # dependencies all official): the AUR helper, which installs the rest (it
 # finds each one's recipe and AUR dependencies) and then keeps them all up
@@ -100,12 +115,12 @@ GPU_PACKAGES_INTEL=(mesa lib32-mesa vulkan-intel lib32-vulkan-intel intel-media-
 GPU_PACKAGES_AMD=(mesa lib32-mesa vulkan-radeon lib32-vulkan-radeon radeontop)
 # nvidia-open, not nvidia: the proprietary kernel modules are gone from the
 # repos (nvidia-open declares Replaces: nvidia<=580.119.02-2), so the old name
-# is simply "target not found" and aborts the whole desktop phase. The non-dkms
-# build is the right one here because BASE_PACKAGES installs the stock `linux`
-# kernel, which it's prebuilt against. Note this only drives Turing (RTX 20xx)
+# is simply "target not found" and aborts the whole desktop phase. CachyOS's
+# build of its modules for their kernel, linux-cachyos-nvidia-open: Arch's
+# nvidia-open is only for the stock `linux` one. Note this only drives Turing (RTX 20xx)
 # and newer — NVIDIA's 615 branch dropped Maxwell/Pascal/Volta, and with the
 # proprietary package gone those cards now fall back to nouveau.
-GPU_PACKAGES_NVIDIA=(nvidia-open nvidia-utils lib32-nvidia-utils nvidia-settings opencl-nvidia)
+GPU_PACKAGES_NVIDIA=(linux-cachyos-nvidia-open nvidia-utils lib32-nvidia-utils nvidia-settings opencl-nvidia)
 # VMs and unknown hardware. Deliberately no software Vulkan: a 64-bit Vulkan
 # device (vulkan-swrast) makes the SDDM theme's video background render blank
 # under VirtualBox (in the astronaut SDDM theme), and lib32-vulkan-swrast
@@ -122,6 +137,24 @@ UPMIX_METHOD='psd'        # psd = matrix-decode rears from L-R; also 'simple', '
 UPMIX_LFE_CUTOFF=150      # Hz and below go to the subwoofer
 UPMIX_FC_CUTOFF=12000     # Hz and below go to the centre speaker
 UPMIX_REAR_DELAY=12.0     # ms of Haas delay on the rears, so they stay behind you
+
+# ── Gaming ─────────────────────────────────────────────────────────────
+# The tuning in lib/gaming.sh. The CPU scheduler (sched_ext): scx_lavd,
+# Valve's, made for the Steam Deck: it finds a game's latency-critical
+# threads and runs them first. Its mode: Gaming, or Auto, LowLatency,
+# PowerSave, Server (scx_loader's); scxctl switches them on a running
+# system. '' keeps the kernel's own scheduler (BORE, linux-cachyos's).
+SCX_SCHEDULER='scx_lavd'
+SCX_MODE='Gaming'
+# CachyOS's signing key (assets/cachyos/cachyos.gpg, from their keyring
+# package), by its full fingerprint: their packages are trusted by this.
+CACHYOS_KEY='882DCFE48E2051D48E2562ABF3B607488DB35A47'
+# Mesa's and NVIDIA's shader caches, each.
+SHADER_CACHE_SIZE='12G'
+# The CPU's protections against Spectre-class attacks. off gives back a few
+# percent in CPU-bound games on older Intel CPUs (little on recent ones and
+# on AMD), but leaves the browser and everything else open to them.
+CPU_MITIGATIONS='on'
 
 # ── Screen ─────────────────────────────────────────────────────────────
 # The screens' brightness, in percent, set in the first Plasma session (a
