@@ -2,12 +2,15 @@
   <img src="assets/logo/banner.png" alt="ARCHMAN" width="664">
 </p>
 
-# Arch Linux + KDE Plasma installer
+# Arch Linux + KDE Plasma installer, tuned for gaming
 
 An installer on a USB stick, the ARCHMAN USB, for a UEFI machine: Btrfs root with `@`/`@home`
 subvolumes, RAM-sized swap with working hibernation, GRUB, a minimal KDE
 Plasma desktop, GPU drivers (64- and 32-bit), Steam, and a handful of AUR
-packages. In English (US), with the timezone, date formats and keyboard of
+packages. This is archman-gaming, a fork of
+[macaricol/arch](https://github.com/macaricol/arch) with the system tuned
+for games (see [Gaming](#gaming)); upstream's fixes come in with
+`git pull upstream main`. In English (US), with the timezone, date formats and keyboard of
 where it's installed (the keyboard is asked, that one first) — see `config.sh`.
 
 ## Quick start
@@ -108,6 +111,69 @@ checked against the mirror's `sha256sums.txt` and GPG-verified against the
 pacman keyring, and are reused instead of re-fetched on later runs. The
 mirror is `ISO_MIRROR` in `config.sh`.
 
+## Gaming
+
+Everything a game gets from this fork, set up during the install with no
+questions (`lib/gaming.sh`, the values in `config.sh`'s Gaming section):
+
+- **CachyOS's packages.** Before `pacstrap`, the install phase adds
+  CachyOS's repositories above Arch's, for this CPU: `znver4` (AMD Zen 4
+  and later), `v4` (AVX-512) or `v3` (AVX2: Intel Haswell, AMD Zen 1 and
+  later), as their own `cachyos-repo.sh` picks it. Every package they
+  rebuild, built for that CPU and with heavier optimisation, comes from
+  them: glibc, Mesa, the kernel, Plasma, most of the system (about 700 of
+  900 packages on Zen 4). Multilib, which they don't rebuild, stays Arch's.
+  An older CPU gets only their generic repo: their kernel, Proton and
+  tools, with Arch's builds of the rest. The system then updates from
+  CachyOS and Arch together (`pacman -Syu`, `paru -Syu`). Games themselves
+  aren't rebuilt, and Steam brings its own runtime libraries, so the gain is
+  in the kernel, the graphics drivers and the desktop around the game.
+- **Their kernel, linux-cachyos**: the BORE scheduler, built with LTO and
+  profile-guided optimisation. On NVIDIA, their `linux-cachyos-nvidia-open`
+  modules for it.
+- **Their system tuning, `cachyos-settings`**: compressed swap in RAM
+  (zram, as big as the RAM, ahead of the disk's swap partition, which stays
+  for hibernation; zswap off), writes flushed in small batches, I/O
+  schedulers by drive type, huge pages without allocation stalls, the NMI
+  and chipset watchdogs off, the NTSYNC module loaded, no zeroing of
+  NVIDIA's system memory. Of what it ships, two things are left off:
+  `ananicy-cpp` isn't enabled (it renices processes, which schedulers like
+  scx_lavd decide about themselves), and its switch of NetworkManager's DNS
+  to `systemd-resolved`, which this system doesn't run, is undone.
+- **scx_lavd as the CPU scheduler** (sched_ext, loaded at boot by
+  `scx_loader`, in its Gaming mode), in place of BORE: Valve's scheduler for
+  the Steam Deck, which finds a game's latency-critical threads and runs
+  them first. If it ever fails, the kernel falls back to its own.
+  `scxctl` switches scheduler or mode on a running system;
+  `SCX_SCHEDULER=''` installs without it (BORE, then).
+- **Proton-CachyOS, GameMode, MangoHud and gamescope** with Steam.
+  Proton-CachyOS is CachyOS's build of Proton, picked in Steam's Settings →
+  Compatibility (for every game) or a game's Properties → Compatibility.
+  Per game, in Properties → Launch Options: `gamemoderun %command%` (full
+  CPU clocks, the game ahead of everything else, no screen saver),
+  `mangohud %command%` (FPS and frame-time overlay, Shift+F12), or both:
+  `gamemoderun mangohud %command%`.
+- **NTSYNC** for Wine and Proton: its device opened to users,
+  `PROTON_USE_NTSYNC=1`.
+- **On top of cachyos-settings**: the soft watchdog off too; no background
+  memory compaction or reclaim bursts; SteamOS's `vm.max_map_count`, and
+  split locks not penalised; shader caches of 12 GB (Mesa's and NVIDIA's),
+  so games don't recompile them, and stutter, after the default 1 GB fills
+  up; NVIDIA's page attribute table on.
+- **The desktop**: fullscreen games may tear when they ask to (vsync off
+  in the game), and Baloo, the file indexer, is off.
+
+CachyOS's packages are signed with their key, which the installer trusts
+by its full fingerprint (`CACHYOS_KEY`), from a copy in the repo
+(`assets/cachyos/cachyos.gpg`, from their keyring package) rather than a
+keyserver at install time. The new system gets it from `cachyos-keyring`.
+An install needs CachyOS's servers as well as Arch's mirrors: if theirs
+can't be reached, the installer says so and starts over.
+
+`CPU_MITIGATIONS='off'` drops the CPU's Spectre-class protections for a few
+percent more in CPU-bound games on older Intel CPUs. It's on by default:
+off, everything else on the machine, the browser included, is exposed too.
+
 ## How it fits together
 
     bootstrap.sh             fetched by the USB at boot: the repo tarball to /tmp (any branch, / in its name too), then setup.sh install
@@ -130,6 +196,9 @@ mirror is `ISO_MIRROR` in `config.sh`.
     lib/system.sh            CPU/GPU detection, pacman/AUR/service helpers, write_file, the installer's paths
     lib/location.sh          the ipinfo.io lookup and what follows from it: timezone, date formats, mirror countries
     lib/keyboard.sh          the keyboard layouts and their question (Wi-Fi screen or install phase)
+    lib/gaming.sh            the gaming build: CachyOS's repos (install phase); kernel options, scheduler, NVIDIA (chroot
+                             phase); GameMode, KWin (desktop phase)
+    assets/cachyos/          CachyOS's signing key, trusted by its fingerprint (CACHYOS_KEY)
     phases/install.sh        live ISO: the questions, partition, format, mirrors, pacstrap (+ CPU/GPU drivers),
                              Wi-Fi carried over, hand off to chroot; then the look question and the restart
     phases/chroot.sh         locale, accounts, sudo, boot splash, hibernation, GRUB, then runs desktop.sh as the user
@@ -166,7 +235,8 @@ countries, pacman's parallel downloads (`PARALLEL_DOWNLOADS`), EFI size,
 Btrfs mount options, the package lists (`BASE_`,
 `KDE_`, `EXTRA_`, `GAMING_`, `AUR_PACKAGES`, per-vendor `GPU_PACKAGES_*`,
 and `AUR_PREBUILT_BIN`, the `-bin` ones the USB carries),
-the surround-upmix settings (`UPMIX_*`), the screens' brightness
+the gaming build (`SCX_SCHEDULER`, `SCX_MODE`, `CACHYOS_KEY`,
+`SHADER_CACHE_SIZE`, `CPU_MITIGATIONS`), the surround-upmix settings (`UPMIX_*`), the screens' brightness
 (`BRIGHTNESS`), the SDDM theme, the wallpapers (`WALLPAPERS_DIR`) and the
 one applied (`WALLPAPER`), the icon theme and the one applied over it
 (`ICON_THEME`, `ICON_THEME_APPLIED`), Plasma widgets, and the Samba workgroup.
@@ -257,7 +327,7 @@ Things that look odd but are deliberate:
   a file the mirrors above haven't synced yet.
 - **Microcode and GPU drivers go in with `pacstrap`**, so the first
   initramfs and `grub.cfg` already include them and nothing needs
-  regenerating later; an NVIDIA machine runs `nvidia-open` from its very
+  regenerating later; an NVIDIA machine runs `linux-cachyos-nvidia-open` from its very
   first boot rather than nouveau. That needs multilib (for the 32-bit
   drivers) enabled before `pacstrap`: the install phase turns it on in the
   live ISO's `pacman.conf`, which `pacstrap` reads, and `pacstrap -P` copies
@@ -439,7 +509,7 @@ table is a description of those lists, not a second copy of them.
 | Package | Purpose |
 |---|---|
 | `base` | Core meta-package for a minimal Arch system (glibc, pacman, systemd) |
-| `linux` | The main Linux kernel |
+| `linux-cachyos` | CachyOS's kernel, for games (see [Gaming](#gaming)) |
 | `linux-firmware` | Firmware blobs for hardware devices (Wi-Fi, GPU, etc.) |
 | `btrfs-progs` | Btrfs filesystem tools, needed for the `@`/`@home` subvolumes |
 | `grub` | Bootloader |
@@ -449,6 +519,9 @@ table is a description of those lists, not a second copy of them.
 | `sudo` | Lets the created user run commands as root |
 | `plymouth` | Boot splash (the `archman` theme) instead of scrolling boot messages |
 | `pciutils` | `lspci`, for the GPU check that decides on Steam (the desktop phase runs in the chroot, on the new system's tools) |
+| `cachyos-keyring`, `cachyos-mirrorlist`, `cachyos-v3-mirrorlist`, `cachyos-v4-mirrorlist` | CachyOS's signing key and servers, which keep the system on their repositories |
+| `cachyos-settings` | CachyOS's system tuning: zram, sysctls, I/O schedulers, watchdogs, NTSYNC |
+| `scx-scheds`, `scx-tools` | The sched_ext CPU schedulers (scx_lavd) and `scx_loader`, which starts one at boot |
 
 CPU microcode (`intel-ucode` / `amd-ucode`) is added here too, picked from the
 detected vendor — see the design note on why it goes in at this stage.
@@ -459,7 +532,7 @@ detected vendor — see the design note on why it goes in at this stage.
 |---|---|---|
 | Intel | `mesa`, `lib32-mesa`, `vulkan-intel`, `lib32-vulkan-intel`, `intel-media-driver` | Graphics drivers (64- and 32-bit), Vulkan, and hardware video decode/encode |
 | AMD | `mesa`, `lib32-mesa`, `vulkan-radeon`, `lib32-vulkan-radeon`, `radeontop` | The same, plus a GPU usage monitor |
-| NVIDIA | `nvidia-open`, `nvidia-utils`, `lib32-nvidia-utils`, `nvidia-settings`, `opencl-nvidia` | Open kernel modules plus the userspace driver (64- and 32-bit), config GUI, OpenCL. `nvidia-open` drives Turing (RTX 20xx) and newer only; older cards fall back to nouveau, since the proprietary package no longer exists in the repos |
+| NVIDIA | `linux-cachyos-nvidia-open`, `nvidia-utils`, `lib32-nvidia-utils`, `nvidia-settings`, `opencl-nvidia` | Open kernel modules, CachyOS's build for their kernel (Arch's `nvidia-open` is for the stock kernel only), plus the userspace driver (64- and 32-bit), config GUI, OpenCL. They drive Turing (RTX 20xx) and newer only; older cards fall back to nouveau, since the proprietary package no longer exists in the repos |
 | Fallback (VMs, unrecognised hardware) | `mesa`, `lib32-mesa` | Only these. Deliberately no software Vulkan: see the design note above |
 
 Hybrid setups get every matching vendor. The 32-bit halves are what Steam
@@ -512,6 +585,10 @@ userspace onto an AMD or Intel machine.
 | Package | From | Purpose |
 |---|---|---|
 | `steam` | Official (multilib) | Installed only when a real GPU was detected, and after the 32-bit drivers, for the reason in the design notes. The install phase enables multilib |
+| `proton-cachyos-slr` | CachyOS | CachyOS's Proton, built for Steam's runtime: picked in Steam's Compatibility settings |
+| `gamemode`, `lib32-gamemode` | CachyOS; the 32-bit half Arch's (multilib) | `gamemoderun %command%`: full CPU clocks and priority while a game runs. The user joins its group, for the priority |
+| `mangohud`, `lib32-mangohud` | CachyOS; the 32-bit half Arch's (multilib) | `mangohud %command%`: the FPS and frame-time overlay (Shift+F12) |
+| `gamescope` | CachyOS (rebuilds of Arch's) | Valve's compositor for one game: upscaling, frame limits, HDR |
 | `base-devel` | Official | Build tools, required to compile anything from the AUR (built with `MAKEFLAGS=-j$(nproc)`: makepkg.conf leaves it to one core) |
 | `paru` | AUR, prebuilt on the USB | The AUR helper: installs the AUR packages after it, and keeps them (itself included) up to date with `paru -Syu`, or from Apdatifier in the panel. Installed first |
 | `zen-browser-bin` | AUR | Firefox-based, privacy-focused browser |

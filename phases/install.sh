@@ -341,8 +341,11 @@ install_base() {
   # trip to the mirror before its bytes.
   sed -i '/^#\[multilib\]/,/^#Include/ s/^#//' /etc/pacman.conf
   sed -i -E "s/^#?ParallelDownloads.*/ParallelDownloads = $PARALLEL_DOWNLOADS/" /etc/pacman.conf
+  # And CachyOS's repositories, above Arch's (lib/gaming.sh).
+  share 50 100
+  add_cachyos_repos
 
-  share 50 1000
+  share 100 1000
   note "Downloading and installing the core system. This takes a few minutes."
   # pacstrap downloads into the new system's cache (see lib/ui.sh's
   # measured_progress).

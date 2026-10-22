@@ -23,6 +23,7 @@ source "$SETUP_DIR/lib/prompt.sh"
 source "$SETUP_DIR/lib/system.sh"
 source "$SETUP_DIR/lib/location.sh"
 source "$SETUP_DIR/lib/keyboard.sh"
+source "$SETUP_DIR/lib/gaming.sh"
 
 phase=${1:-}
 case $phase in
