@@ -114,7 +114,8 @@ which draws nothing over it, for at least 4 seconds in all;
 the first thing after it is the keyboard layout list (or, after the Wi-Fi
 screen, the account screen).
 
-With no cable plugged in, on a machine with Wi-Fi, it asks for the keyboard
+A plugged-in cable gets up to 30 seconds to come online, for wired cards
+slow to get an address. With no cable plugged in, on a machine with Wi-Fi, it asks for the keyboard
 layout and shows the networks in range instead, strongest first, each with
 its signal and whether it's secured: pick one with the arrow keys, type its
 password, and once connected it goes straight on to the installer (networks

@@ -120,8 +120,10 @@ show_splash
 ( sleep 2; under_logo "Checking if this device is ready..." ) &
 checking=$!
 
-# The network. A cable is usually up within a few seconds; without one, on
-# a machine with Wi-Fi, the Wi-Fi screen (phases/wifi.sh, from the copy of
+# The network. A cable is usually up within a few seconds, but some wired
+# cards take longer to get an address: with a cable plugged in (a link),
+# it waits up to 30 s before giving up on it. Without one, after 8 s, on a
+# machine with Wi-Fi, the Wi-Fi screen (phases/wifi.sh, from the copy of
 # the installer above) asks for the keyboard layout and lists the networks
 # to pick from, then goes on to the installer. Without Wi-Fi either, it
 # waits for a cable, up to 30 s.
@@ -138,18 +140,31 @@ if (( WIFI_TEST )); then
   wifi_test_setup
 fi
 
+# cable — whether a network cable is plugged in: a wired card (a device,
+# not Wi-Fi) with a link. (carrier can't be read while the card is down.)
+cable() {
+  local net carrier
+  for net in /sys/class/net/*; do
+    [[ -e $net/device && ! -e $net/wireless ]] || continue
+    read -r carrier < "$net/carrier" 2>/dev/null && (( carrier )) && return 0
+  done
+  return 1
+}
+
 started=$SECONDS network=0
 if (( WIFI_TEST )); then
   wifi_test_wait_station   # and straight to the Wi-Fi screen, cable or not
-else
-  wait_online 8 && network=1
+elif wait_online 8 || { cable && wait_online $(( 30 - (SECONDS - started) )); }; then
+  network=1
 fi
 if (( ! network )) && compgen -G '/sys/class/net/*/wireless' > /dev/null; then
   kill "$checking" 2>/dev/null; wait "$checking" 2>/dev/null
   # The Wi-Fi screen stays up, saying it's connected, until the installer's
   # first screen replaces it: not the splash again, which would show for
-  # only as long as the download takes, a blink.
-  bash "$share/installer/setup.sh" wifi || give_up "${NO_INTERNET[@]}"
+  # only as long as the download takes, a blink. When it stops, its own
+  # words on what went wrong stay too (--keep).
+  bash "$share/installer/setup.sh" wifi \
+    || give_up --keep "No internet connection" "Restart to try again."
   network=1   # the Wi-Fi screen only returns online
 fi
 (( network )) || wait_online $(( 30 - (SECONDS - started) )) \

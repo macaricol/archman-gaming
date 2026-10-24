@@ -117,15 +117,24 @@ wifi_password() {
 }
 
 # wifi_station — prints the iwd station's D-Bus path and its device name
-# (wlan0...), the first Wi-Fi adapter's; nothing without one.
+# (wlan0...), the first Wi-Fi adapter's; nothing without one. Asked again
+# for up to 10 s: iwd may still be starting, or the card still loading its
+# firmware or powering up after rfkill's unblock, and until then there's
+# no station.
 wifi_station() {
-  busctl --timeout=5 --json=short call net.connman.iwd / org.freedesktop.DBus.ObjectManager GetManagedObjects 2>/dev/null \
+  local until=$(( SECONDS + 10 ))
+  until busctl --timeout=5 --json=short call net.connman.iwd / org.freedesktop.DBus.ObjectManager GetManagedObjects 2>/dev/null \
     | python3 -c '
 import json, sys
 for path, ifaces in json.load(sys.stdin)["data"][0].items():
     if "net.connman.iwd.Station" in ifaces:
         print(path, ifaces["net.connman.iwd.Device"]["Name"]["data"])
-        break'
+        break
+else:
+    sys.exit(1)' 2>/dev/null; do
+    (( SECONDS < until )) || return 1
+    sleep 1
+  done
 }
 
 # wifi_scan STATION — scans (a few seconds), then fills names, kinds (psk,
