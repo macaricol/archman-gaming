@@ -129,14 +129,17 @@ which draws nothing over it, for at least 4 seconds in all;
 the first thing after it is the keyboard layout list (or, after the Wi-Fi
 screen, the account screen).
 
-A plugged-in cable gets up to 30 seconds to come online, for wired cards
-slow to get an address. With no cable plugged in, on a machine with Wi-Fi, it asks for the keyboard
+On a machine with a wired network card, when the cable isn't online
+within 8 seconds, it says it's waiting for it, up to 45 seconds in all,
+and goes on the moment it's online: some wired cards take that long. With
+Wi-Fi too, "Press Enter to use Wi-Fi" under it skips the wait.
+With no cable plugged in, on a machine with Wi-Fi, it asks for the keyboard
 layout and shows the networks in range instead, strongest first, each with
 its signal and whether it's secured: pick one with the arrow keys, type its
 password, and once connected it goes straight on to the installer (networks
 with a company login, 802.1X, aren't supported). The new system gets the same network (as a NetworkManager
 connection), so it's online from its first boot. If there's no Wi-Fi
-either, it waits up to 30 seconds for a cable. Whatever goes wrong, it says
+either, it waits up to 45 seconds for a cable. Whatever goes wrong, it says
 so in plain words, what to do about it, and restarts on Enter: no shell or
 commands on screen. (To dig in: Alt+F2 for another console, root, no
 password.)

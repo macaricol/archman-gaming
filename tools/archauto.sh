@@ -80,16 +80,20 @@ NO_INTERNET=("No internet connection"
   "Plug in a network cable, or make sure you're near a Wi-Fi network,"
   "then restart your device.")
 
-# under_logo "Text" — a line just under the big logo: three text rows below
-# its bottom edge, which fb-logo.py reports in pixels. With the text splash
-# instead, its own status line. Placed without a newline: scrolling the
-# console would smear the logo.
+# under_logo "Text" [LINES [SGR]] — a line just under the big logo: three
+# text rows below its bottom edge, which fb-logo.py reports in pixels, and
+# LINES more (0), in SGR (bold white). With the text splash instead, its
+# own status line, or, LINES down, a line after it, a blank between.
+# Placed without a newline: scrolling the console would smear the logo.
 under_logo() {
   local LC_ALL=C.UTF-8 rows cols row
-  (( LOGO_BOTTOM )) || { splash "$1"; return; }
+  if (( ! LOGO_BOTTOM )); then
+    if (( ${2:-0} )); then echo; center "$1" "${3:-1;97}"; else splash "$1"; fi
+    return
+  fi
   read -r rows cols < <(stty size < /dev/tty)
-  row=$(( LOGO_BOTTOM * rows / SCREEN_HEIGHT + 4 ))
-  printf '\e[%d;1H\e[2K\e[%d;%dH\e[1;97m%s\e[0m' "$row" "$row" $(( (cols - ${#1}) / 2 + 1 )) "$1"
+  row=$(( LOGO_BOTTOM * rows / SCREEN_HEIGHT + 4 + ${2:-0} ))
+  printf '\e[%d;1H\e[2K\e[%d;%dH\e[%sm%s\e[0m' "$row" "$row" $(( (cols - ${#1}) / 2 + 1 )) "${3:-1;97}" "$1"
 }
 
 # The logo, two thirds of the screen wide (the text splash if there's no
@@ -121,12 +125,15 @@ show_splash
 checking=$!
 
 # The network. A cable is usually up within a few seconds, but some wired
-# cards take longer to get an address: with a cable plugged in (a link),
-# it waits up to 30 s before giving up on it. Without one, after 8 s, on a
-# machine with Wi-Fi, the Wi-Fi screen (phases/wifi.sh, from the copy of
-# the installer above) asks for the keyboard layout and lists the networks
-# to pick from, then goes on to the installer. Without Wi-Fi either, it
-# waits for a cable, up to 30 s.
+# cards take much longer, even to see the cable (seen: an RTL8125 on a
+# gaming PC, past 30 s): on a machine with a wired card, after 8 s, it says
+# it's waiting for the cable, and waits up to 45 s in all, going on the
+# moment the internet answers; with Wi-Fi too, Enter skips the wait.
+# Without a wired card, after 8 s, on a machine with Wi-Fi, the Wi-Fi
+# screen (phases/wifi.sh, from the copy of the installer above) asks for
+# the keyboard layout and lists the networks to pick from, then goes on to
+# the installer; so does a machine with both, after the wait. Without
+# Wi-Fi either, it waits for a cable, up to 45 s in all.
 #
 # online and wait_online, by the clock, are the Wi-Fi screen's, from the
 # copy of the installer: its file defines functions only.
@@ -140,21 +147,39 @@ if (( WIFI_TEST )); then
   wifi_test_setup
 fi
 
-# cable — whether a network cable is plugged in: a wired card (a device,
-# not Wi-Fi) with a link. (carrier can't be read while the card is down.)
-cable() {
-  local net carrier
+# wired_card — whether this machine has a wired network card: a device,
+# not Wi-Fi (nor the loopback, which has no device).
+wired_card() {
+  local net
   for net in /sys/class/net/*; do
-    [[ -e $net/device && ! -e $net/wireless ]] || continue
-    read -r carrier < "$net/carrier" 2>/dev/null && (( carrier )) && return 0
+    [[ -e $net/device && ! -e $net/wireless ]] && return 0
   done
   return 1
+}
+
+# wait_for_cable SECONDS — wait_online's wait, saying so under the logo,
+# and, on a machine with Wi-Fi, that Enter goes to the Wi-Fi screen
+# instead: then, as when the time's up, it returns 1. Online, the line
+# says so, while the installer downloads.
+wait_for_cable() {
+  local until=$(( SECONDS + $1 )) key wifi=0
+  compgen -G '/sys/class/net/*/wireless' > /dev/null && wifi=1
+  kill "$checking" 2>/dev/null; wait "$checking" 2>/dev/null
+  under_logo "Waiting for the network cable..."
+  (( ! wifi )) || under_logo "Press Enter to use Wi-Fi" 2 90
+  until online; do
+    (( SECONDS < until )) || return 1
+    # A key a second, as wait_online sleeps; Enter reads as nothing.
+    if read -rsn1 -t 1 key < /dev/tty && [[ -z $key ]] && (( wifi )); then return 1; fi
+  done
+  under_logo "Connected. Getting the installer ready..."
+  (( ! wifi )) || under_logo '' 2
 }
 
 started=$SECONDS network=0
 if (( WIFI_TEST )); then
   wifi_test_wait_station   # and straight to the Wi-Fi screen, cable or not
-elif wait_online 8 || { cable && wait_online $(( 30 - (SECONDS - started) )); }; then
+elif wait_online 8 || { wired_card && wait_for_cable $(( 45 - (SECONDS - started) )); }; then
   network=1
 fi
 if (( ! network )) && compgen -G '/sys/class/net/*/wireless' > /dev/null; then
@@ -167,7 +192,7 @@ if (( ! network )) && compgen -G '/sys/class/net/*/wireless' > /dev/null; then
     || give_up --keep "No internet connection" "Restart to try again."
   network=1   # the Wi-Fi screen only returns online
 fi
-(( network )) || wait_online $(( 30 - (SECONDS - started) )) \
+(( network )) || wait_online $(( 45 - (SECONDS - started) )) \
   || { kill "$checking" 2>/dev/null
        give_up "${NO_INTERNET[@]}"; }
 
