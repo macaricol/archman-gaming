@@ -67,11 +67,12 @@ BTRFS_MOUNT_OPTS='noatime,compress=zstd:1'
 # them. Their kernel, linux-cachyos (BORE scheduler, built with LTO and
 # profile-guided optimisation), not the stock one; their keyring and mirror
 # lists, which keep the system on their repos; cachyos-settings, their
-# system tuning (zram, sysctls, I/O schedulers...); and the sched_ext CPU
-# schedulers with their loader.
+# system tuning (zram, sysctls, I/O schedulers...); the sched_ext CPU
+# schedulers with their loader; and lm_sensors (sensors, fancontrol), for
+# the fans the motherboard's fan driver brings (lib/gaming.sh).
 BASE_PACKAGES=(base linux-cachyos linux-firmware btrfs-progs grub efibootmgr nano networkmanager sudo plymouth pciutils
                cachyos-keyring cachyos-mirrorlist cachyos-v3-mirrorlist cachyos-v4-mirrorlist cachyos-settings
-               scx-scheds scx-tools)
+               scx-scheds scx-tools lm_sensors)
 
 KDE_PACKAGES=(
   plasma-desktop sddm sddm-kcm kscreen plasma-pa plasma-nm plasma-systemmonitor
@@ -86,6 +87,7 @@ EXTRA_PACKAGES=(
   ttf-liberation noto-fonts-cjk
   ntfs-3g exfatprogs dosfstools   # format/repair NTFS, exFAT, FAT32 (mounting needs nothing extra)
   matugen                         # skwd-wall's desktop colours, from the wallpaper
+  coolercontrol                   # fan curves, the motherboard's and the GPU's (CachyOS's repo; brings its service)
 )
 
 # Only installed when a supported GPU was detected, see desktop phase. Steam,
@@ -93,8 +95,9 @@ EXTRA_PACKAGES=(
 # runtime; picked in Steam's Compatibility settings), GameMode
 # (gamemoderun %command%), MangoHud's overlay (mangohud %command%; Shift+F12
 # toggles it) and gamescope, Valve's compositor for one game (upscaling,
-# frame limits, HDR).
-GAMING_PACKAGES=(steam proton-cachyos-slr gamemode lib32-gamemode mangohud lib32-mangohud gamescope)
+# frame limits, HDR). And LACT, the graphics card's settings: clocks, power
+# limit, undervolt, fan curve (AMD, NVIDIA, Intel).
+GAMING_PACKAGES=(steam proton-cachyos-slr gamemode lib32-gamemode mangohud lib32-mangohud gamescope lact)
 # From the AUR, installed in this order. paru first, with makepkg (its
 # dependencies all official): the AUR helper, which installs the rest (it
 # finds each one's recipe and AUR dependencies) and then keeps them all up
