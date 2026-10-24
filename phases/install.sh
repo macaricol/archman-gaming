@@ -64,10 +64,12 @@ phase_install() {
 # off: leaving would end the USB's start-up and leave the screen black. The
 # keyboard first, unless the USB's Wi-Fi screen asked already; going back
 # from the review starts again at the keyboard, on the layout picked; Esc
-# on the drive list, at the account questions. Every answer given comes
-# back to keep or change.
+# on the drive list, at the account questions; Go back on the Windows
+# screen, at the drive list. Every answer given comes back to keep or
+# change.
 ask_questions() {
-  local ask_keyboard=0
+  local ask_keyboard=0 picked windows rest
+  local -a details
   read_keyboard_choice || choose_keyboard
   while :; do
     (( ! ask_keyboard )) || choose_keyboard
@@ -78,17 +80,37 @@ ask_questions() {
     # One password for both the user and root.
     password PASSWORD "Password"
 
-    select_drive || { ask_keyboard=0; continue; }   # Esc: back to the account
+    picked=0
+    while select_drive; do
+      if choose_install_space; then picked=1; break; fi
+    done
+    (( picked )) || { ask_keyboard=0; continue; }   # Esc: back to the account
 
     header "Review & confirm"
-    centred_details Hostname: "$HOST_NAME" Username: "$USER_NAME" Drive: "$DRIVE_LABEL" \
-      Timezone: "$TIMEZONE" Keyboard: "$KEYBOARD_LABEL"
+    details=(Hostname: "$HOST_NAME" Username: "$USER_NAME" Drive: "$DRIVE_LABEL")
+    (( ! BESIDE_WINDOWS )) || details+=(Install: "next to Windows, in $(size_label "$FREE_BYTES") free")
+    centred_details "${details[@]}" Timezone: "$TIMEZONE" Keyboard: "$KEYBOARD_LABEL"
     echo
-    warn "Everything on $DRIVE_LABEL will be erased. This can't be undone."
-    # Going back is the one picked to start with: the other erases the drive.
-    buttons '' 0 \
-      "Go back" "Edit your answers. Your drive hasn't been touched yet." \
-      "Yes, install" "Erase $DRIVE_LABEL and install ARCHMAN on it."
+    # Going back is the one picked to start with: the other erases the drive,
+    # or its free space.
+    if (( BESIDE_WINDOWS )); then
+      if (( ${#OLD_PARTS[@]} )); then rest="The ARCHMAN installed next to it before is replaced."
+      else rest="Nothing else on the drive is touched."; fi
+      centred_message "$C_SOFT" "Windows and its files stay as they are. $rest"
+      echo
+      ! bitlocker_on "$DRIVE" \
+        || warn "BitLocker is on: have Windows' recovery key at hand, it may ask for it the next time it starts."
+      buttons '' 0 \
+        "Go back" "Edit your answers. Your drive hasn't been touched yet." \
+        "Yes, install" "Install ARCHMAN in the free space on $DRIVE_LABEL, next to Windows."
+    else
+      windows=''
+      [[ -z $WINDOWS_ESP ]] || windows=', Windows included'
+      warn "Everything on $DRIVE_LABEL will be erased$windows. This can't be undone."
+      buttons '' 0 \
+        "Go back" "Edit your answers. Your drive hasn't been touched yet." \
+        "Yes, install" "Erase $DRIVE_LABEL and install ARCHMAN on it."
+    fi
     (( PICKED == 1 )) && return 0
   done
 }
@@ -172,7 +194,7 @@ unmount_new_system() {
   # on, which for an unmounted /mnt would be the live system, this
   # installer included.
   local mounts=() m users
-  for m in /mnt /mnt/boot; do mountpoint -q "$m" && mounts+=("$m"); done
+  for m in /mnt /mnt/boot /mnt/efi; do mountpoint -q "$m" && mounts+=("$m"); done
   (( ${#mounts[@]} )) || return 0
   users=$(fuser -m "${mounts[@]}" 2>/dev/null | tr -s ' ') || true
   if [[ -n ${users// } ]]; then
@@ -205,13 +227,15 @@ wait_for_usb_removal() {
 # Arrow-key menu over the machine's disks, minus the live USB we booted from,
 # each shown by name and size, "CT1000P310SSD8 (931.5G)": its model, or its
 # device name when it reports none, and the device name too when two drives
-# would read the same. Sets DRIVE (/dev/...) and DRIVE_LABEL.
+# would read the same; one with Windows on it says so, with the free space
+# next to it, "· Windows, 412G free". Sets DRIVE (/dev/...), DRIVE_LABEL
+# (without the Windows part) and WINDOWS_ESP (windows_esp's, or nothing).
 select_drive() {
   local live_disk=''
   live_disk=$(live_usb_disk) || true
 
-  local -a paths labels
-  local path size type model i j
+  local -a paths labels items esps
+  local path size type model i j esp
   while read -r path size type model; do
     [[ $type == disk && $path != "$live_disk" ]] || continue
     model=${model%%+([[:space:]])}
@@ -227,59 +251,231 @@ select_drive() {
       fi
     done
   done
+  for i in "${!paths[@]}"; do
+    esp=$(windows_esp "${paths[i]}") || esp=''
+    esps+=("$esp") items+=("${labels[i]}")
+    [[ -n $esp ]] || continue
+    free_space "${paths[i]}"
+    if (( FREE_BYTES >= 1 << 30 )); then items[i]+=" · Windows, $(size_label "$FREE_BYTES") free"
+    else items[i]+=" · Windows, no free space"; fi
+  done
 
   # The review screen that follows is the drive's second look. Esc returns
   # 1: back to the account questions. Asked again, on the drive picked
   # before.
-  MENU_BACK=1 MENU_START=${DRIVE_LABEL:-} menu "Choose the installation drive" "${labels[@]}" || return 1
-  for i in "${!labels[@]}"; do
-    if [[ ${labels[i]} == "$MENU_CHOICE" ]]; then DRIVE=${paths[i]} DRIVE_LABEL=${labels[i]}; fi
+  MENU_BACK=1 MENU_START=${DRIVE_ITEM:-} menu "Choose the installation drive" "${items[@]}" || return 1
+  for i in "${!items[@]}"; do
+    if [[ ${items[i]} == "$MENU_CHOICE" ]]; then
+      DRIVE=${paths[i]} DRIVE_LABEL=${labels[i]} DRIVE_ITEM=${items[i]} WINDOWS_ESP=${esps[i]}
+    fi
   done
   [[ -b $DRIVE ]] || die "$DRIVE_LABEL isn't there any more. Check it's connected."
 }
 
-partition_and_mount() {
-  local efi swap root
-  efi=$(partition_path "$DRIVE" 1)
-  swap=$(partition_path "$DRIVE" 2)
-  root=$(partition_path "$DRIVE" 3)
+# choose_install_space — for a drive with Windows on it (WINDOWS_ESP), the
+# Windows screen: install next to it, in free_space's block, or erase the
+# drive; BESIDE_WINDOWS 1 or 0 (always 0 on other drives). Next to Windows
+# only when the block holds the swap (as big as the RAM) and MIN_ROOT_SIZE
+# of root; otherwise how to make room, and Go back, which returns 1: the
+# drive list again. Asked again, it starts on the button picked before.
+choose_install_space() {
+  BESIDE_WINDOWS=0
+  [[ -n $WINDOWS_ESP ]] || return 0
+  free_space "$DRIVE"
+  local swap=$(( $(ram_mib) << 20 )) free earlier=''
+  local need=$(( swap + (MIN_ROOT_SIZE << 30) ))
+  free=$(size_label "$FREE_BYTES")
+  (( ! ${#OLD_PARTS[@]} )) || earlier=", the ARCHMAN installed there before included"
+  local erase="Erase all of $DRIVE_LABEL, Windows included, and install ARCHMAN on the whole drive."
+  header "Windows is on this drive"
+  if (( FREE_BYTES >= need )); then
+    centred_message "$C_TEXT" "$DRIVE_LABEL has Windows and $free of free space next to it$earlier."
+    echo
+    buttons '' "${BESIDE_PICKED:-0}" \
+      "Next to Windows" "Install ARCHMAN in the $free of free space. Windows and its files stay as they are; you choose between them when the computer starts." \
+      "Erase the drive" "$erase"
+    BESIDE_PICKED=$PICKED
+    (( PICKED )) || BESIDE_WINDOWS=1
+    return 0
+  fi
+  if (( FREE_BYTES >= 1 << 30 )); then free="only $free of free space"; else free="no free space"; fi
+  centred_message "$C_TEXT" "$DRIVE_LABEL has Windows and $free next to it. ARCHMAN needs at least $(size_label "$need"): ${MIN_ROOT_SIZE}G for the system and your files, and $(size_label "$swap") for hibernation (this computer's memory)."
+  echo
+  centred_message "$C_SOFT" "To make room, shrink Windows' drive in Windows' Disk Management (right-click C: and choose Shrink Volume), then start this installer again."
+  echo
+  buttons '' 0 "Go back" "Choose another drive." "Erase the drive" "$erase"
+  (( PICKED ))
+}
 
+# windows_esp DRIVE — prints Windows' EFI partition on DRIVE: an EFI system
+# partition with Windows' boot manager on it, looked at read-only, or where
+# it's mounted already (on /mnt/efi, by an install that stopped: mounting
+# it read-only too would fail, and the drive would show without Windows).
+# Only on GPT drives: a Windows on an MBR drive starts the BIOS way, which
+# GRUB, installed the UEFI way, can't start, and the partitioning here is
+# GPT's.
+windows_esp() {
+  [[ $(lsblk -dno PTTYPE "$1") == gpt ]] || return 1
+  local part type dir=/run/archman-esp look found
+  mkdir -p "$dir"
+  while read -r part type; do
+    [[ $type == c12a7328-f81f-11d2-ba4b-00a0c93ec93b ]] || continue
+    if ! look=$(findmnt -nfro TARGET -S "$part"); then
+      mount -o ro "$part" "$dir" 2>/dev/null || continue
+      look=$dir
+    fi
+    found=0
+    [[ -f $look/EFI/Microsoft/Boot/bootmgfw.efi ]] && found=1   # (FAT: any case)
+    [[ $look != "$dir" ]] || umount "$dir"
+    (( found )) && { echo "$part"; return 0; }
+  done < <(lsblk -rnpo PATH,PARTTYPE "$1")
+  return 1
+}
+
+# Our partitions' names next to Windows: free_space counts them as free
+# space, so installing again (after an install that stopped, or over an
+# older ARCHMAN) takes their place rather than finding the free space gone.
+BESIDE_SWAP_NAME='ARCHMAN Swap' BESIDE_ROOT_NAME='ARCHMAN Root'
+
+# free_space DRIVE — the largest free block on a GPT drive, ARCHMAN's own
+# partitions (above) counted as free: FREE_FIRST and FREE_LAST, its first
+# and last sectors (the first on a MiB, as partitions start), FREE_BYTES,
+# and SECTOR_SIZE; OLD_PARTS, those partitions' numbers, and USED_PARTS,
+# every other's. From sfdisk's dump of the partition table.
+free_space() {
+  local line first=0 last=0 start size name number
+  local -a spans=()
+  SECTOR_SIZE=512 OLD_PARTS=() USED_PARTS=() FREE_FIRST=0 FREE_LAST=0 FREE_BYTES=0
+  while IFS= read -r line; do
+    case $line in
+      first-lba:*)   first=${line##* } ;;
+      last-lba:*)    last=${line##* } ;;
+      sector-size:*) SECTOR_SIZE=${line##* } ;;
+      /*' : '*)
+        [[ $line =~ start=\ *([0-9]+) ]] && start=${BASH_REMATCH[1]}
+        [[ $line =~ \ size=\ *([0-9]+) ]] && size=${BASH_REMATCH[1]}
+        name=''
+        [[ $line =~ name=\"([^\"]*)\" ]] && name=${BASH_REMATCH[1]}
+        number=${line%% *} number=${number##*[!0-9]}
+        if [[ $name == "$BESIDE_SWAP_NAME" || $name == "$BESIDE_ROOT_NAME" ]]; then
+          OLD_PARTS+=("$number")
+        else
+          USED_PARTS+=("$number") spans+=("$start $(( start + size - 1 ))")
+        fi ;;
+    esac
+  done < <(sfdisk -d "$1" 2>/dev/null)
+  (( last )) || return 0
+  # The gaps between the partitions, in the order they're on the drive.
+  local from=$first end
+  while read -r start end; do
+    [[ -n $start ]] || continue
+    free_gap "$from" $(( start - 1 ))
+    (( end + 1 > from )) && from=$(( end + 1 ))
+  done < <(printf '%s\n' "${spans[@]}" | sort -n)
+  free_gap "$from" "$last"
+}
+
+# free_gap FIRST LAST — free_space's: the sectors from FIRST to LAST, as the
+# FREE_ block when it's the largest yet.
+free_gap() {
+  local align=$(( (1 << 20) / SECTOR_SIZE ))
+  local first=$(( ($1 + align - 1) / align * align ))
+  local bytes=$(( ($2 - first + 1) * SECTOR_SIZE ))
+  (( bytes > FREE_BYTES )) || return 0
+  FREE_FIRST=$first FREE_LAST=$2 FREE_BYTES=$bytes
+}
+
+# True when a partition on DRIVE is encrypted with BitLocker.
+# (Not lsblk | grep -q: grep stops at the first match, and with pipefail
+# lsblk's broken pipe would make that a failure.)
+bitlocker_on() { grep -qx BitLocker <<< "$(lsblk -rno FSTYPE "$1")"; }
+
+# size_label BYTES — "412G", "9.5G", as lsblk shows sizes; rounded down, so
+# free space is never more than it says.
+size_label() { numfmt --to=iec --round=down "$1"; }
+
+# This machine's memory, in MiB: the swap's size, for hibernation.
+ram_mib() { echo $(( $(awk '/MemTotal/{print $2}' /proc/meminfo) / 1024 )); }
+
+# partition_and_mount — the drive's partitions, formatted and mounted on
+# /mnt: the whole drive's (partition_drive), or the free space's next to
+# Windows (partition_beside_windows), which leaves Windows' EFI partition as
+# it is, mounted on /efi. Either sets EFI_PART, SWAP_PART and ROOT_PART;
+# SWAP_PART is for hibernation too (the chroot phase): this partition, not
+# one found by its label, which another disk's older install may carry too.
+partition_and_mount() {
   # Undo a half-finished previous attempt so a re-run doesn't hit "busy".
-  swapoff "$swap" 2>/dev/null || true
+  local part fstype
+  while read -r part fstype; do
+    [[ $fstype != swap ]] || swapoff "$part" 2>/dev/null || true
+  done < <(lsblk -rnpo PATH,FSTYPE "$DRIVE")
   umount -R /mnt 2>/dev/null || true
 
   local ram_mib
-  ram_mib=$(( $(awk '/MemTotal/{print $2}' /proc/meminfo) / 1024 ))
+  ram_mib=$(ram_mib)
   note "Creating space for the system, hibernation and your files"
-  printf 'Layout: %s EFI, %sM swap (= RAM, for hibernation), rest Btrfs\n' "$EFI_SIZE" "$ram_mib" >> "$LOG_FILE"
-
-  run wipefs -af "$DRIVE"
-  run sgdisk -Z \
-    -n1:0:+"$EFI_SIZE"    -t1:ef00 -c1:EFI \
-    -n2:0:+"${ram_mib}M"  -t2:8200 -c2:Swap \
-    -n3:0:0               -t3:8300 -c3:Root "$DRIVE"
+  if (( BESIDE_WINDOWS )); then partition_beside_windows "$ram_mib"; else partition_drive "$ram_mib"; fi
   partprobe "$DRIVE" 2>/dev/null || true
   # partprobe only makes the kernel re-read the table; udev still has to
   # create the device nodes before the check below can pass.
   udevadm settle
-  [[ -b $efi && -b $swap && -b $root ]] || die "Couldn't prepare $DRIVE_LABEL for the installation."
+  [[ -b $EFI_PART && -b $SWAP_PART && -b $ROOT_PART ]] || die "Couldn't prepare $DRIVE_LABEL for the installation."
+  # What the space held before (an older install's file system) isn't left
+  # for blkid to find under the new ones.
+  run wipefs -a "$SWAP_PART" "$ROOT_PART"
 
   note "Setting up the file system..."
-  run mkfs.fat -F32 -n BOOT "$efi"
-  run mkswap -L SWAP "$swap"
-  run mkfs.btrfs -f -L ROOT "$root"
+  (( BESIDE_WINDOWS )) || run mkfs.fat -F32 -n BOOT "$EFI_PART"
+  run mkswap -L SWAP "$SWAP_PART"
+  run mkfs.btrfs -f -L ROOT "$ROOT_PART"
 
-  run mount "$root" /mnt
+  run mount "$ROOT_PART" /mnt
   run btrfs subvolume create /mnt/@ /mnt/@home
   run umount /mnt
-  run mount -o "$BTRFS_MOUNT_OPTS,subvol=@" "$root" /mnt
+  run mount -o "$BTRFS_MOUNT_OPTS,subvol=@" "$ROOT_PART" /mnt
   mkdir -p /mnt/{boot,home}
-  run mount -o "$BTRFS_MOUNT_OPTS,subvol=@home" "$root" /mnt/home
-  run mount "$efi" /mnt/boot
-  run swapon "$swap"
-  # For hibernation (the chroot phase): this partition, not one found by its
-  # label, which another disk's older install may carry too.
-  SWAP_PART=$swap
+  run mount -o "$BTRFS_MOUNT_OPTS,subvol=@home" "$ROOT_PART" /mnt/home
+  # Next to Windows, /boot (the kernels) stays on Btrfs: Windows' EFI
+  # partition, often 100 MB, has no room for them.
+  if (( BESIDE_WINDOWS )); then mkdir -p /mnt/efi; run mount "$EFI_PART" /mnt/efi
+  else run mount "$EFI_PART" /mnt/boot; fi
+  run swapon "$SWAP_PART"
+}
+
+# partition_drive RAM_MIB — the whole drive, erased: EFI, swap (RAM_MIB),
+# root in the rest.
+partition_drive() {
+  EFI_PART=$(partition_path "$DRIVE" 1) SWAP_PART=$(partition_path "$DRIVE" 2) ROOT_PART=$(partition_path "$DRIVE" 3)
+  printf 'Layout: %s EFI, %sM swap (= RAM, for hibernation), rest Btrfs\n' "$EFI_SIZE" "$1" >> "$LOG_FILE"
+  run wipefs -af "$DRIVE"
+  run sgdisk -Z \
+    -n1:0:+"$EFI_SIZE"    -t1:ef00 -c1:EFI \
+    -n2:0:+"${1}M"        -t2:8200 -c2:Swap \
+    -n3:0:0               -t3:8300 -c3:Root "$DRIVE"
+}
+
+# partition_beside_windows RAM_MIB — swap (RAM_MIB) and root in free_space's
+# block, by its exact sectors (sgdisk's defaults would take the first free
+# space, which can be another, smaller one), with the two lowest partition
+# numbers no other partition has; an earlier ARCHMAN's partitions, part of
+# that block, deleted first. Nothing else on the drive is touched.
+partition_beside_windows() {
+  free_space "$DRIVE"
+  local -a old=()
+  local n swap_number='' root_number='' swap_last
+  for n in "${OLD_PARTS[@]}"; do old+=(-d "$n"); done
+  for (( n = 1; n <= 128; n++ )); do
+    [[ " ${USED_PARTS[*]} " != *" $n "* ]] || continue
+    if [[ -z $swap_number ]]; then swap_number=$n; else root_number=$n; break; fi
+  done
+  swap_last=$(( FREE_FIRST + ($1 << 20) / SECTOR_SIZE - 1 ))
+  printf 'Layout: next to Windows, in sectors %s-%s: %sM swap (= RAM, for hibernation), rest Btrfs; replaced: %s\n' \
+    "$FREE_FIRST" "$FREE_LAST" "$1" "${OLD_PARTS[*]:-nothing}" >> "$LOG_FILE"
+  (( ! ${#old[@]} )) || run sgdisk "${old[@]}" "$DRIVE"
+  run sgdisk \
+    -n"$swap_number:$FREE_FIRST:$swap_last"           -t"$swap_number":8200 -c"$swap_number:$BESIDE_SWAP_NAME" \
+    -n"$root_number:$(( swap_last + 1 )):$FREE_LAST"   -t"$root_number":8300 -c"$root_number:$BESIDE_ROOT_NAME" "$DRIVE"
+  EFI_PART=$WINDOWS_ESP SWAP_PART=$(partition_path "$DRIVE" "$swap_number") ROOT_PART=$(partition_path "$DRIVE" "$root_number")
 }
 
 # Ranks the mirrors pacstrap downloads from: the fastest in our country;
@@ -386,7 +582,7 @@ configure_new_system() {
   screen_env
   arch-chroot /mnt env HOST_NAME="$HOST_NAME" USER_NAME="$USER_NAME" TIMEZONE="$TIMEZONE" TIME_LOCALE="$TIME_LOCALE" \
     KEYMAP="$KEYMAP" X11_LAYOUT="$X11_LAYOUT" X11_VARIANT="$X11_VARIANT" X11_OPTIONS="$X11_OPTIONS" \
-    SWAP_PART="$SWAP_PART" FAN_MODULES="$FAN_MODULES" FAN_PACKAGES="$FAN_PACKAGES" "${SCREEN_ENV[@]}" \
+    SWAP_PART="$SWAP_PART" BESIDE_WINDOWS="$BESIDE_WINDOWS" WINDOWS_ESP="$WINDOWS_ESP" FAN_MODULES="$FAN_MODULES" FAN_PACKAGES="$FAN_PACKAGES" "${SCREEN_ENV[@]}" \
     bash "$CHROOT_SETUP_DIR/setup.sh" chroot
   # The desktop phase has done every step, and logged the last one's time: the
   # screens that follow show the bar full.

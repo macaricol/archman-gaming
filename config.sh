@@ -51,14 +51,24 @@ TIME_LOCALE=${TIME_LOCALE:-auto}
 
 # ── Disk ───────────────────────────────────────────────────────────────
 # Layout is always: EFI, swap sized to RAM (so hibernation works), Btrfs root
-# with @ and @home subvolumes.
+# with @ and @home subvolumes. Next to Windows (a drive with Windows' EFI
+# partition and free space beside it), only swap and root, in the largest
+# free block, all of it, and Windows' EFI partition as /efi; the block
+# must hold the swap and at least MIN_ROOT_SIZE (GiB) of root.
+MIN_ROOT_SIZE=30
+# GRUB's menu, next to Windows (hidden otherwise): its seconds before it
+# starts the first entry, ARCHMAN, and its theme (assets/grub/archman,
+# rebuilt with tools/make-grub-theme.py), drawn for this mode, the
+# firmware's own when it has none.
+GRUB_MENU_TIMEOUT=5
+GRUB_MENU_GFXMODE='1920x1080,auto'
 # Mirrors are ranked in this machine's country, looked up from its public IP
 # (auto), or in the countries listed here, e.g. 'PT,ES'.
 MIRROR_COUNTRIES='auto'
 # Files pacman downloads at once, during the install and on the new system
 # (pacman's own default is 5).
 PARALLEL_DOWNLOADS=10
-EFI_SIZE='512M'
+EFI_SIZE='512M'           # erasing the drive; next to Windows, its own is used
 BTRFS_MOUNT_OPTS='noatime,compress=zstd:1'
 
 # ── Packages ───────────────────────────────────────────────────────────

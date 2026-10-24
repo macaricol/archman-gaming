@@ -1,0 +1,75 @@
+# The archman GRUB theme, made by tools/make-grub-theme.py: one of the
+# installer's screens at 1920x1080, in its 12x22 font.
+title-text: ""
+desktop-color: "#01050E"
+terminal-font: "ARCHMAN Regular 22"
+
++ image {
+  left = 50%-474
+  top = 44
+  file = "logo.png"
+}
+
++ label {
+  left = 0
+  top = 220
+  width = 100%
+  height = 22
+  align = "center"
+  font = "ARCHMAN Regular 22"
+  color = "#A80440"
+  text = "ARCHMAN · KDE Plasma"
+}
+
++ label {
+  left = 0
+  top = 308
+  width = 100%
+  height = 22
+  align = "center"
+  font = "ARCHMAN Regular 22"
+  color = "#C9CEDB"
+  text = "Choose what to start"
+}
+
++ boot_menu {
+  left = 50%-216
+  top = 374
+  width = 432
+  height = 88
+  item_font = "ARCHMAN Regular 22"
+  selected_item_font = "ARCHMAN Regular 22"
+  item_color = "#8E95A8"
+  selected_item_color = "#01050E"
+  item_height = 22
+  item_padding = 0
+  item_spacing = 0
+  icon_width = 0
+  icon_height = 0
+  item_icon_space = 12
+  selected_item_pixmap_style = "select_*.png"
+  scrollbar = false
+}
+
++ label {
+  left = 0
+  top = 484
+  width = 100%
+  height = 22
+  align = "center"
+  font = "ARCHMAN Regular 22"
+  color = "#4A5A80"
+  text = "↑↓ choose · Enter start"
+}
+
++ label {
+  id = "__timeout__"
+  left = 0
+  top = 528
+  width = 100%
+  height = 22
+  align = "center"
+  font = "ARCHMAN Regular 22"
+  color = "#8E95A8"
+  text = "Starting ARCHMAN in %d s"
+}

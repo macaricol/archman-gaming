@@ -41,7 +41,52 @@ The installer itself is fetched from this repo at boot, from the `REPO`
 and `BRANCH` in `config.sh` baked into the USB. For a USB that installs
 from another branch: `sudo BRANCH=clauding tools/build-autoinstall-iso.sh`.
 
-**This erases the selected drive.** Test in a VM first.
+**This erases the selected drive**, unless it has Windows on it and you
+choose to install next to it (below). Test in a VM first.
+
+### Next to Windows
+
+To keep Windows, make room for ARCHMAN in Windows first: Disk Management,
+right-click C:, Shrink Volume. The drive menu then shows the drive with
+Windows and its free space, "CT1000P310SSD8 (931.5G) · Windows, 412G free",
+and picking it asks whether to install next to Windows (the one picked to
+start with) or to erase the drive, Windows included. Next to Windows, the
+installer only adds two partitions in the largest free block, all of it:
+the swap, as big as the RAM, and root. Windows, its partitions and its EFI
+partition's contents stay as they are; GRUB goes in next to Windows' boot
+manager there. The block has to hold the swap and at least `MIN_ROOT_SIZE`
+(30G) for the system and your files; when it's smaller, the screen says how
+much is needed and how to make room, and only offers to go back or to
+erase. Installing again takes the place of an earlier ARCHMAN next to
+Windows (its partitions, named "ARCHMAN Swap" and "ARCHMAN Root", count as
+free space), so an install that stopped halfway can simply be run again.
+
+At every start, GRUB's menu, in the ARCHMAN look, lists ARCHMAN Linux,
+Windows and the firmware's settings, and starts ARCHMAN after 5 seconds
+(`GRUB_MENU_TIMEOUT`). What makes it work:
+
+- Windows is found by its boot manager (`EFI/Microsoft/Boot/bootmgfw.efi`)
+  on an EFI system partition of a GPT drive, looked at read-only. A Windows
+  on an MBR drive starts the BIOS way, which this UEFI install can't start:
+  that drive only gets the erase option.
+- Windows' EFI partition is often 100 MB, too small for the kernels, so it's
+  mounted on `/efi` and `/boot` stays on Btrfs, which GRUB reads. GRUB
+  installs there as `ARCHMAN` (the firmware's boot menu shows it next to
+  Windows Boot Manager), not as `GRUB`, which another Linux may use, and
+  without the copy at `EFI/BOOT/BOOTX64.EFI`, Windows' own fallback.
+- Windows' entry is `/etc/grub.d/15_windows`, which chainloads its boot
+  manager by its EFI partition's UUID, so `grub-mkconfig` keeps it. No
+  os-prober: it would only find the same Windows, after mounting every
+  partition to look.
+- The hardware clock keeps local time, as Windows does (`hwclock
+  --localtime`); otherwise one of them would be off by the timezone.
+- With BitLocker on, the review says to have the recovery key at hand: the
+  boot path changes once GRUB starts Windows, and BitLocker may ask for it
+  once.
+- Windows updates sometimes put Windows Boot Manager first in the
+  firmware's boot order again, so the computer starts Windows directly.
+  Moving ARCHMAN back to first in the firmware's boot menu fixes that.
+
 
 ### Monthly builds
 
@@ -221,6 +266,7 @@ until a profile is assigned again.
     assets/tux/              Tux on his splat, for the last screen (tools/make-tux.py)
     assets/linux-facts.txt   the facts shown while the steps run
     assets/plymouth/         the boot splash theme: script, logo, spinner
+    assets/grub/archman/     GRUB's menu next to Windows, as an installer screen (tools/make-grub-theme.py)
     assets/sddm/archman/     the login screen: an Omarchy-style unlock screen, as an SDDM theme (tools/make-sddm-theme.py)
     assets/consolefonts/     the console fonts, with Pac-Man, the logo's and Tux's cells, arrows and the bar's eighths added (tools/make-console-fonts.py)
     assets/plasma/           the first login's panel layout (layout.js, a Plasma script) and KVitals' readings (kvitals.json)
@@ -270,6 +316,8 @@ Everything lives in `config.sh`: the repo and branch the USB installs from
 (`REPO`, `BRANCH`), the official ISO's mirror (`ISO_MIRROR`), the installer's tagline and console
 palette (`TAGLINE`, `CONSOLE_PALETTE`), timezone and date formats (both detected by default), language (`LOCALE`), mirror
 countries, pacman's parallel downloads (`PARALLEL_DOWNLOADS`), EFI size,
+the smallest root next to Windows (`MIN_ROOT_SIZE`) and GRUB's menu there
+(`GRUB_MENU_TIMEOUT`, `GRUB_MENU_GFXMODE`),
 Btrfs mount options, the package lists (`BASE_`,
 `KDE_`, `EXTRA_`, `GAMING_`, `AUR_PACKAGES`, per-vendor `GPU_PACKAGES_*`,
 and `AUR_PREBUILT_BIN`, the `-bin` ones the USB carries),
@@ -533,7 +581,15 @@ Things that look odd but are deliberate:
   hidden (timeout 0) and its "Loading Linux..." lines commented out; besides
   its own boot entry, a copy goes to the drive's fallback path
   (`EFI/BOOT/BOOTX64.EFI`, `--removable`), for firmware that ignores a new
-  drive's entries.
+  drive's entries. Next to Windows the menu shows instead, without that
+  copy (see [Next to Windows](#next-to-windows)), in its own theme,
+  `assets/grub/archman`: one of the installer's screens at 1920×1080
+  (`GRUB_MENU_GFXMODE`; the firmware's own mode when it lacks that one),
+  with the logo, the tagline, a title, the entries as the installer's
+  menu draws a list, its key hint and the countdown, all in the patched
+  12×22 console font, the one the console has at that size.
+  `tools/make-grub-theme.py` turns that font into GRUB's (a BDF copy,
+  through `grub-mkfont`).
 - The live USB is filtered out of the drive menu, and `udevadm settle`
   runs after partitioning so the new device nodes exist before they're used.
 

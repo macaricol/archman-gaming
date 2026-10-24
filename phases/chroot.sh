@@ -27,7 +27,11 @@ configure_locale() {
   # Settled by the install phase (resolve_timezone); never left at auto.
   [[ $TIMEZONE != auto && -f /usr/share/zoneinfo/$TIMEZONE ]] || TIMEZONE=UTC
   ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
-  run hwclock --systohc   # (through run: it can wait a second or two for the clock)
+  # (Through run: it can wait a second or two for the clock.) Next to
+  # Windows, the clock keeps local time, as Windows does: in UTC, one of
+  # them would be off by the timezone.
+  if (( ${BESIDE_WINDOWS:-0} )); then run hwclock --systohc --localtime
+  else run hwclock --systohc; fi
   # One language for everything (LOCALE), Plasma's too, which follows LANG;
   # dates and times the country's way (TIME_LOCALE, settled by the install
   # phase), when this glibc has that locale. Each enabled in locale.gen by
@@ -139,11 +143,75 @@ add_kernel_option() {
 # firmware's list untouched), which firmware boots from any drive whose
 # entries it doesn't take. Some do that to a new one on the next start
 # (seen: an AMI board, its old GRUB entries left, went to its EFI shell).
+# Its menu hidden. Next to Windows (BESIDE_WINDOWS), on Windows' EFI
+# partition (/efi), as ARCHMAN, so it takes no other system's GRUB entry
+# there; without the copy, which would take the place of Windows' own
+# fallback; and with the menu (configure_grub_menu).
 install_bootloader() {
-  sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=0/; s/^GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=hidden/' /etc/default/grub
-  run grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
-  run grub-install --target=x86_64-efi --efi-directory=/boot --removable
+  if (( ${BESIDE_WINDOWS:-0} )); then
+    configure_grub_menu
+    run grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=ARCHMAN
+  else
+    set_grub_option GRUB_TIMEOUT 0
+    set_grub_option GRUB_TIMEOUT_STYLE hidden
+    run grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
+    run grub-install --target=x86_64-efi --efi-directory=/boot --removable
+  fi
   regenerate_grub
+}
+
+# GRUB's menu next to Windows: ARCHMAN first (GRUB_DISTRIBUTOR names it
+# "ARCHMAN Linux"), started after GRUB_MENU_TIMEOUT seconds, then Windows,
+# from its boot manager on the EFI partition, by /etc/grub.d/15_windows (so
+# grub-mkconfig keeps it; after 10_linux's entries), with that partition's
+# UUID; os-prober would find only this same Windows, mounting every
+# partition there is to look. In the ARCHMAN theme (install_grub_theme),
+# at GRUB_MENU_GFXMODE.
+configure_grub_menu() {
+  set_grub_option GRUB_TIMEOUT "$GRUB_MENU_TIMEOUT"
+  set_grub_option GRUB_TIMEOUT_STYLE menu
+  set_grub_option GRUB_DISTRIBUTOR '"ARCHMAN"'
+  set_grub_option GRUB_GFXMODE "$GRUB_MENU_GFXMODE"
+  if install_grub_theme; then
+    set_grub_option GRUB_THEME "$GRUB_THEME_DIR/theme.txt"
+  else
+    note "The boot menu's theme is missing from the installer, using GRUB's own look"
+  fi
+  local uuid
+  uuid=$(blkid -o value -s UUID "$WINDOWS_ESP") || die "Couldn't find Windows' boot partition for the boot menu."
+  write_file /etc/grub.d/15_windows 755 <<EOF
+#!/bin/sh
+# Windows, started by its own boot manager on the EFI partition it shares
+# with ARCHMAN (by the ARCHMAN installer).
+cat << 'MENU'
+menuentry 'Windows' --class windows --id windows {
+	insmod part_gpt
+	insmod fat
+	search --no-floppy --fs-uuid --set=root $uuid
+	chainloader /EFI/Microsoft/Boot/bootmgfw.efi
+}
+MENU
+EOF
+}
+
+# The archman GRUB theme (assets/grub/archman, tools/make-grub-theme.py):
+# the logo, the tagline and the menu in the installer's font and colours.
+GRUB_THEME_DIR=/boot/grub/themes/archman
+install_grub_theme() {
+  local src=$SETUP_DIR/assets/grub/archman
+  [[ -f $src/theme.txt ]] || return 1
+  rm -rf "$GRUB_THEME_DIR"
+  install -Dm644 -t "$GRUB_THEME_DIR" "$src"/*
+}
+
+# set_grub_option NAME VALUE — NAME=VALUE in /etc/default/grub, in place of
+# its line (commented out or not), or added.
+set_grub_option() {
+  if grep -q "^#\?$1=" /etc/default/grub; then
+    sed -i "s|^#\?$1=.*|$1=$2|" /etc/default/grub
+  else
+    echo "$1=$2" >> /etc/default/grub
+  fi
 }
 
 # Moves this installer into the new user's home, for the desktop phase and the
