@@ -15,6 +15,8 @@ phase_install() {
   geolocate
   resolve_timezone
   resolve_time_locale
+  # And its motherboard's fan chip, for the bar's total below (lib/gaming.sh).
+  detect_fan_drivers
 
   # The splash stays up at least 4 seconds in all (since SPLASH_SINCE);
   # only then the console's font and colours, which redraw the screen, and
@@ -26,9 +28,10 @@ phase_install() {
   # steps below from partitioning on, then the desktop phase's, which the chroot
   # phase runs and which carries the bar on. Weights: see lib/ui.sh's step
   # (step_weights reads them off the step lines here, as they're written).
-  # The desktop phase's AUR step weighs by what this USB brought prebuilt.
+  # The desktop phase's AUR step weighs by what this USB brought prebuilt;
+  # its fan driver step is there only when this machine needs one built.
   PROGRESS_TOTAL=$(( $(step_weights "$SETUP_DIR/phases/install.sh") + $(step_weights "$SETUP_DIR/phases/desktop.sh")
-                     + $(aur_weight "$ISO_PACKAGES") ))
+                     + $(aur_weight "$ISO_PACKAGES") + (${#FAN_PACKAGES} ? FAN_DRIVER_WEIGHT : 0) ))
 
   ask_questions
   # Bash's own clock; it keeps running through arch-chroot and the desktop
@@ -383,7 +386,7 @@ configure_new_system() {
   screen_env
   arch-chroot /mnt env HOST_NAME="$HOST_NAME" USER_NAME="$USER_NAME" TIMEZONE="$TIMEZONE" TIME_LOCALE="$TIME_LOCALE" \
     KEYMAP="$KEYMAP" X11_LAYOUT="$X11_LAYOUT" X11_VARIANT="$X11_VARIANT" X11_OPTIONS="$X11_OPTIONS" \
-    SWAP_PART="$SWAP_PART" "${SCREEN_ENV[@]}" \
+    SWAP_PART="$SWAP_PART" FAN_MODULES="$FAN_MODULES" FAN_PACKAGES="$FAN_PACKAGES" "${SCREEN_ENV[@]}" \
     bash "$CHROOT_SETUP_DIR/setup.sh" chroot
   # The desktop phase has done every step, and logged the last one's time: the
   # screens that follow show the bar full.

@@ -168,7 +168,8 @@ run_desktop_phase() {
   trap 'rm -f '"$rule" EXIT
   screen_env
   runuser -u "$USER_NAME" -- env TERM="$TERM" \
-    X11_LAYOUT="$X11_LAYOUT" X11_VARIANT="$X11_VARIANT" X11_OPTIONS="$X11_OPTIONS" "${SCREEN_ENV[@]}" \
+    X11_LAYOUT="$X11_LAYOUT" X11_VARIANT="$X11_VARIANT" X11_OPTIONS="$X11_OPTIONS" \
+    FAN_MODULES="$FAN_MODULES" FAN_PACKAGES="$FAN_PACKAGES" "${SCREEN_ENV[@]}" \
     bash "/home/$USER_NAME/$USER_SETUP_DIR/setup.sh" desktop
   rm -f "$rule"
 }

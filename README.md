@@ -19,7 +19,7 @@ The ARCHMAN USB is the only way to install. On an Arch machine, build it
 from the official Arch ISO (fetched for you), write it to a stick and boot
 the computer from it:
 
-    sudo pacman -S --needed libisoburn squashfs-tools devtools git curl
+    sudo pacman -S --needed libisoburn squashfs-tools devtools git curl lm_sensors
     sudo tools/build-autoinstall-iso.sh
     sudo dd if=archlinux-autoinstall.iso of=/dev/sdX bs=4M status=progress oflag=sync
 
@@ -80,7 +80,7 @@ so in plain words, what to do about it, and restarts on Enter: no shell or
 commands on screen. (To dig in: Alt+F2 for another console, root, no
 password.)
 
-    sudo pacman -S --needed libisoburn squashfs-tools devtools git curl
+    sudo pacman -S --needed libisoburn squashfs-tools devtools git curl lm_sensors
     sudo tools/build-autoinstall-iso.sh
 
 The AUR packages that compile from source (`AUR_PACKAGES` without the
@@ -146,7 +146,8 @@ questions (`lib/gaming.sh`, the values in `config.sh`'s Gaming section):
   them first. If it ever fails, the kernel falls back to its own.
   `scxctl` switches scheduler or mode on a running system;
   `SCX_SCHEDULER=''` installs without it (BORE, then).
-- **Proton-CachyOS, GameMode, MangoHud and gamescope** with Steam.
+- **Proton-CachyOS, GameMode, MangoHud, gamescope and LACT** with Steam
+  (LACT: the graphics card's clocks, power limit and fan curve).
   Proton-CachyOS is CachyOS's build of Proton, picked in Steam's Settings →
   Compatibility (for every game) or a game's Properties → Compatibility.
   Per game, in Properties → Launch Options: `gamemoderun %command%` (full
@@ -162,6 +163,23 @@ questions (`lib/gaming.sh`, the values in `config.sh`'s Gaming section):
   up; NVIDIA's page attribute table on.
 - **The desktop**: fullscreen games may tear when they ask to (vsync off
   in the game), and Baloo, the file indexer, is off.
+- **The motherboard's fan driver**, so CoolerControl, `fancontrol` and the
+  like see its fans: `sensors-detect`, which the USB carries, finds the
+  board's fan chip on the live system before the progress bar starts (its
+  Super I/O scan only, not the riskier I2C/SMBus one), and its driver is
+  loaded at every boot (`/etc/modules-load.d/fans.conf`). A USB built
+  before it carried `sensors-detect` installs no fan driver: rebuild it.
+  Most are the kernel's own
+  (`nct6775`, `it87`...). Two kinds of chip get a better one from the AUR,
+  built for the kernel by DKMS, in a step of its own: MSI's Nuvoton NCT6687D
+  (`nct6687d-dkms-git`; the kernel's `nct6683` only reads it, and is kept
+  off), and ITE chips the kernel has no driver for, Gigabyte's newer boards
+  (`it87-dkms-git`, allowed the chip's ports even when the firmware claims
+  them too, `ignore_resource_conflict`). Nothing for a laptop's or mini
+  PC's embedded controller, whose fans its firmware keeps to itself. What
+  it found goes in the log (`Fan chip:`, `Fan drivers:`). A driver that
+  still won't load on some boards, refused over an ACPI resource conflict
+  (`dmesg`), needs the kernel option `acpi_enforce_resources=lax`.
 
 CachyOS's packages are signed with their key, which the installer trusts
 by its full fingerprint (`CACHYOS_KEY`), from a copy in the repo
@@ -173,6 +191,24 @@ can't be reached, the installer says so and starts over.
 `CPU_MITIGATIONS='off'` drops the CPU's Spectre-class protections for a few
 percent more in CPU-bound games on older Intel CPUs. It's on by default:
 off, everything else on the machine, the browser included, is exposed too.
+
+### One machine's cooling
+
+`cooling/` holds one PC's settings, from
+[macaricol/cooling_setup](https://github.com/macaricol/cooling_setup): an
+MSI MAG B660M MORTAR (`MS-7D42`) with an RTX 4070 Ti SUPER. CoolerControl's
+fan curves for every fan, the graphics card's included, and LACT's
+undervolt for the card (its clocks only: its fan control stays off, as
+CoolerControl has the fans). `cooling/cooling.sh` puts them in place during
+the desktop phase, on that board only; anywhere else it does nothing. Its
+lines in the install log start with `Cooling:`.
+
+It's on its own: delete the folder and the install carries on without it.
+The files are copied as saved, and CoolerControl and LACT take them up at
+the first boot. CoolerControl keys its settings by IDs it works out from the
+hardware: should one come out different on a new install, that device's
+fans show unassigned in CoolerControl, and run as the firmware has them
+until a profile is assigned again.
 
 ## How it fits together
 
@@ -197,8 +233,10 @@ off, everything else on the machine, the browser included, is exposed too.
     lib/location.sh          the ipinfo.io lookup and what follows from it: timezone, date formats, mirror countries
     lib/keyboard.sh          the keyboard layouts and their question (Wi-Fi screen or install phase)
     lib/gaming.sh            the gaming build: CachyOS's repos (install phase); kernel options, scheduler, NVIDIA (chroot
-                             phase); GameMode, KWin (desktop phase)
+                             phase); the motherboard's fan driver, GameMode, KWin (desktop phase)
     assets/cachyos/          CachyOS's signing key, trusted by its fingerprint (CACHYOS_KEY)
+    cooling/                 one machine's CoolerControl and LACT settings, put in place by cooling.sh on that
+                             board only (desktop phase); can be deleted at any time
     phases/install.sh        live ISO: the questions, partition, format, mirrors, pacstrap (+ CPU/GPU drivers),
                              Wi-Fi carried over, hand off to chroot; then the look question and the restart
     phases/chroot.sh         locale, accounts, sudo, boot splash, hibernation, GRUB, then runs desktop.sh as the user
@@ -522,6 +560,7 @@ table is a description of those lists, not a second copy of them.
 | `cachyos-keyring`, `cachyos-mirrorlist`, `cachyos-v3-mirrorlist`, `cachyos-v4-mirrorlist` | CachyOS's signing key and servers, which keep the system on their repositories |
 | `cachyos-settings` | CachyOS's system tuning: zram, sysctls, I/O schedulers, watchdogs, NTSYNC |
 | `scx-scheds`, `scx-tools` | The sched_ext CPU schedulers (scx_lavd) and `scx_loader`, which starts one at boot |
+| `lm_sensors` | `sensors` and `fancontrol`, for the fans the motherboard's fan driver brings (see [Gaming](#gaming)) |
 
 CPU microcode (`intel-ucode` / `amd-ucode`) is added here too, picked from the
 detected vendor — see the design note on why it goes in at this stage.
@@ -579,6 +618,7 @@ userspace onto an AMD or Intel machine.
 | `noto-fonts-cjk` | Chinese, Japanese and Korean coverage |
 | `ntfs-3g`, `exfatprogs`, `dosfstools` | Format and repair NTFS, exFAT and FAT32. Only formatting and repair need these; mounting works without them |
 | `matugen` | Works out the desktop's colours from the wallpaper, for skwd-wall |
+| `coolercontrol` | Fan curves for the motherboard's fans (with its fan driver, see [Gaming](#gaming)) and the GPU's, from any temperature. From CachyOS's repo; its service, `coolercontrold` (a dependency), is enabled. Until a curve is set, the fans run as the firmware has them |
 
 ### `GAMING_PACKAGES`, `base-devel` and `AUR_PACKAGES`
 
@@ -589,6 +629,7 @@ userspace onto an AMD or Intel machine.
 | `gamemode`, `lib32-gamemode` | CachyOS; the 32-bit half Arch's (multilib) | `gamemoderun %command%`: full CPU clocks and priority while a game runs. The user joins its group, for the priority |
 | `mangohud`, `lib32-mangohud` | CachyOS; the 32-bit half Arch's (multilib) | `mangohud %command%`: the FPS and frame-time overlay (Shift+F12) |
 | `gamescope` | CachyOS (rebuilds of Arch's) | Valve's compositor for one game: upscaling, frame limits, HDR |
+| `lact` | Official | The graphics card's settings (AMD, NVIDIA, Intel): clocks, power limit, undervolt, fan curve. Its service, `lactd`, is enabled; nothing changes until something is set. Set the card's fans here or in CoolerControl, not both |
 | `base-devel` | Official | Build tools, required to compile anything from the AUR (built with `MAKEFLAGS=-j$(nproc)`: makepkg.conf leaves it to one core) |
 | `paru` | AUR, prebuilt on the USB | The AUR helper: installs the AUR packages after it, and keeps them (itself included) up to date with `paru -Syu`, or from Apdatifier in the panel. Installed first |
 | `zen-browser-bin` | AUR | Firefox-based, privacy-focused browser |
@@ -597,6 +638,7 @@ userspace onto an AMD or Intel machine.
 | `skwd-deck-bin` | AUR (recipe `skwd-suite-bin`), prebuilt on the USB | The suite's control daemon and tools (`skwd-walld`, `skwd-helm`) |
 | `skwd-wall-v2-bin` | AUR (recipe `skwd-suite-bin`), prebuilt on the USB | skwd-wall, the wallpaper picker (Alt+W) |
 | `skwd-paper-plasma` | AUR, prebuilt on the USB | Plasma's wallpaper plugin for it, which draws the desktop's wallpaper |
+| `nct6687d-dkms-git` or `it87-dkms-git`, with the kernel's headers | AUR (headers official) | Only on a board with that fan chip (see [Gaming](#gaming)): its fan driver, built by DKMS, and rebuilt with each kernel update |
 
 The skwd-wall packages are a beta; the three `-bin` ones are listed in
 `AUR_PREBUILT_BIN` so the USB carries them too (a `-bin` package is

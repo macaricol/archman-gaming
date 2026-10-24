@@ -14,7 +14,7 @@
 #
 # Requires root (to loop-mount the EFI image), through sudo, and these
 # packages (it checks first, and prints the command for any missing):
-#   sudo pacman -S --needed libisoburn squashfs-tools devtools git curl
+#   sudo pacman -S --needed libisoburn squashfs-tools devtools git curl lm_sensors
 # devtools builds the AUR packages that compile from source (AUR_PACKAGES in
 # config.sh, all but the -bin ones) into the ISO, so installs from it don't
 # compile them.
@@ -91,6 +91,7 @@ declare -A DEPENDENCIES=(
   [mkarchroot]=devtools               # (not with --build-user: makepkg instead)
   [git]=git                           # fetches their build recipes
   [curl]=curl                         # downloads the official ISO
+  [sensors-detect]=lm_sensors         # carried, for the installer to find the fan chip
 )
 if [[ -n $BUILD_USER ]]; then unset 'DEPENDENCIES[makechrootpkg]' 'DEPENDENCIES[mkarchroot]'; fi
 missing_commands=() missing_packages=()
@@ -332,6 +333,10 @@ install -Dm644 -t "$installer/assets/consolefonts" "$repo_dir"/assets/consolefon
   printf 'LOGO_WIDTH=%q\nLOGO=%q\n' "${logo%%$'\n'*}" "${logo#*$'\n'}"
 } > "$share/archauto.conf"
 install -Dm755 "$repo_dir/tools/archauto.sh" "$work/airootfs/usr/local/bin/archauto"
+# sensors-detect, a Perl script (the ISO has Perl, not lm_sensors): the
+# installer finds the motherboard's fan chip with it before the progress
+# bar's total, which a fan driver to build adds to (lib/gaming.sh).
+install -Dm755 "$(command -v sensors-detect)" "$share/sensors-detect"
 # --wifi-test's simulated networks, for that build only.
 (( ! WIFI_TEST )) || install -Dm644 -t "$share" "$repo_dir/test/wifi-test.sh"
 

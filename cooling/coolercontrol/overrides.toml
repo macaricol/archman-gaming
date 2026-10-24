@@ -1,0 +1,11 @@
+# CoolerControl display-name overrides.
+# Managed by coolercontrold: comments are not preserved on rewrite.
+# Hand edits are applied at the next daemon startup.
+
+[devices.7bfee7e15e0af819a1c74ac2f088d69197bdae5f361d2af4da2960c931be3cc7]
+device_name = "nct6687"
+
+[devices.7bfee7e15e0af819a1c74ac2f088d69197bdae5f361d2af4da2960c931be3cc7.channels]
+fan1 = { channel_label = "CPU Fan", label = "AIO Radiator Fans" }
+fan2 = { channel_label = "Pump Fan", label = "AIO Pump Fan" }
+fan4 = { channel_label = "System Fan #2", label = "Case Fans" }

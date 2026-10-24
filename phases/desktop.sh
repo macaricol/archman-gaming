@@ -15,6 +15,15 @@ phase_desktop() {
   step "Installing extras from the Arch community" "$(aur_weight "$SETUP_DIR/packages")"
   install_aur_packages
 
+  # The motherboard's fan driver, when the kernel's own won't do
+  # (lib/gaming.sh): a step only then. Weight: FAN_DRIVER_WEIGHT, which the
+  # install phase counted in the bar's total in that case (step_weights
+  # reads only the step lines at this indentation, with a number).
+  if [[ -n $FAN_PACKAGES ]]; then
+    step "Adding the fan controls" "$FAN_DRIVER_WEIGHT"
+    install_fan_drivers
+  fi
+
   # The settings, a second or so each: one step, not a screen flashing past
   # for each. Weight: the parts' measured times; the look's files the most.
   step "Setting up your desktop" 11

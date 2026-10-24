@@ -3,8 +3,9 @@
 # repositories, added on the live ISO before pacstrap so the whole system
 # comes from them; the system's tuning (kernel options, scheduler, drivers),
 # run as root by the chroot phase before the initramfs and grub.cfg are
-# built; and the user's (GameMode, the desktop), run by the desktop phase
-# once the gaming packages are in. The values are config.sh's Gaming section.
+# built; the motherboard's fan driver, found on the live ISO and set up by
+# the desktop phase, as is the user's (GameMode, the desktop), once the
+# gaming packages are in. The values are config.sh's Gaming section.
 
 # ── CachyOS ────────────────────────────────────────────────────────────
 
@@ -146,6 +147,126 @@ EOF
   printf '[main]\ndns=default\n' | write_file /etc/NetworkManager/conf.d/dns.conf
 }
 
+# ── Fan control ────────────────────────────────────────────────────────
+# The motherboard's fans, for CoolerControl, fancontrol or any other tool on
+# the kernel's hwmon interface, which sees them only once a driver for the
+# board's fan chip (its Super I/O) is loaded. The kernel has most of those
+# drivers but doesn't load them by itself; for some chips it has none, or
+# one that only reads them. Found by the install phase, before the progress
+# bar's total, which the step that builds a driver is then counted in; set
+# up by the desktop phase, after the AUR's packages, as paru builds the
+# drivers that aren't the kernel's. In between, in the environment, as
+# words: FAN_MODULES, the kernel modules to load at boot, and FAN_PACKAGES,
+# those of them to build from the AUR.
+FAN_MODULES=${FAN_MODULES:-}
+FAN_PACKAGES=${FAN_PACKAGES:-}
+
+# The fan driver step's weight, in seconds: the kernel's headers, and the
+# driver's download and build (DKMS). Estimated: a VM has no fan chip to
+# measure it on.
+FAN_DRIVER_WEIGHT=45
+
+# sensors-detect (lm_sensors), on the live system: the USB carries it
+# (tools/build-autoinstall-iso.sh), to run on the ISO's own Perl.
+ISO_SENSORS_DETECT=/usr/local/share/archauto/sensors-detect
+
+# detect_fan_drivers — on the live ISO, as root: the board's fan chip, by
+# sensors-detect, and its drivers, in FAN_MODULES and FAN_PACKAGES. None on
+# a USB built before it carried sensors-detect. Only its Super I/O scan:
+# the others find no fan chips, and its I2C/SMBus one is the one it warns
+# can upset some machines. Its pick of driver is for reading the sensors,
+# and for two kinds of chip there's a better one:
+# - Nuvoton's NCT6687D (MSI's boards since the 500 series): nct6687, from
+#   the AUR. The kernel's nct6683, sensors-detect's pick, only reads it, and
+#   only on the boards it knows; kept off (configure_fan_drivers).
+# - ITE's chips it has no driver for (to-be-written), or doesn't know (an ID
+#   0x86xx or 0x87xx: Gigabyte's newer boards): it87 from the AUR, which
+#   knows many more of them than the kernel's.
+# Any other driver it names is the kernel's own (nct6775 for most others,
+# it87, f71882fg...). None for an embedded controller (a laptop's, a mini
+# PC's; an unknown ID of another range), whose fans its firmware keeps to
+# itself.
+detect_fan_drivers() {
+  FAN_MODULES='' FAN_PACKAGES=''
+  if [[ ! -f $ISO_SENSORS_DETECT ]] || ! command -v perl &>/dev/null; then
+    echo 'Fan chip: not looked for (no sensors-detect on this USB)' >> "$LOG_FILE"
+    return 0
+  fi
+  local report driver chip
+  local -a modules=() packages=()
+  # Its questions answered: the embedded sensors' scan no (the CPU's, loaded
+  # already), the Super I/O one yes, the rest no (IPMI, ISA, I2C, its config
+  # file); unanswered, it would take its defaults, yes. (Answers from a pipe
+  # get a warning, which goes with the rest: --auto would run the I2C scan.)
+  report=$({ printf 'no\nyes\n'; printf 'no\n%.0s' {1..20}; } | perl "$ISO_SENSORS_DETECT" 2>&1) || true
+  # Its summary: Driver `name': then, for each chip, Chip `name' (confidence: n).
+  while IFS=$'\t' read -r driver chip; do
+    case $driver:$chip in
+      nct6683:*NCT6687D*) modules+=(nct6687) packages+=(nct6687d-dkms-git) ;;
+      to-be-written:ITE*) modules+=(it87) packages+=(it87-dkms-git) ;;
+      to-be-written:*)    ;;
+      *)                  modules+=("$driver") ;;
+    esac
+  done < <(awk -F"[\`']" '/^Driver `/ { driver = $2 } /Chip `/ { print driver "\t" $2 }' <<< "$report")
+  if grep -q 'Found unknown chip with ID 0x8[67]' <<< "$report"; then
+    modules+=(it87) packages+=(it87-dkms-git)
+  fi
+  FAN_MODULES=$(printf '%s\n' "${modules[@]}" | sort -u | xargs)
+  FAN_PACKAGES=$(printf '%s\n' "${packages[@]}" | sort -u | xargs)
+  { grep '^Found' <<< "$report" || echo 'Fan chip: none found'
+    printf 'Fan drivers: %s\n' "${FAN_MODULES:-none}"; } >> "$LOG_FILE"
+}
+
+# install_fan_drivers — FAN_PACKAGES, built by DKMS for the kernel, with
+# the kernel's headers it needs (linux-cachyos-headers, or whichever kernel
+# it is). One that fails to install or build is left out with a warning:
+# the fans still run, as the firmware has them, only no tool can set them.
+install_fan_drivers() {
+  note "Adding the driver for your motherboard's fans..."
+  local pkg
+  local -a kernels
+  readarray -t kernels < <(pacman -Qqo /usr/lib/modules/*/vmlinuz)
+  share 0 400
+  if ! retry 10 run sudo pacman -S --needed --noconfirm "${kernels[@]/%/-headers}"; then
+    warn "Couldn't add the driver for your motherboard's fans"
+    return 0
+  fi
+  share 400 1000
+  for pkg in $FAN_PACKAGES; do
+    retry 10 run env MAKEFLAGS="-j$(nproc)" paru -S --needed --noconfirm --skipreview "$pkg" \
+      || warn "Couldn't add $pkg, the driver for your motherboard's fans"
+  done
+}
+
+# configure_fan_drivers — FAN_MODULES loaded at every boot, those the
+# kernel has: one whose build failed isn't there, and isn't asked for.
+# nct6687 with the kernel's nct6683 kept off, which would take the chip
+# first. The AUR's it87 allowed the chip's ports when the firmware claims
+# them too (an ACPI resource conflict, which otherwise keeps it from loading
+# on many Gigabyte boards): both then use them, as the firmware seldom does
+# once the system runs.
+configure_fan_drivers() {
+  local kver module
+  local -a kernels=(/usr/lib/modules/*/vmlinuz) modules=() options=()
+  kver=${kernels[0]%/vmlinuz} kver=${kver##*/}
+  for module in $FAN_MODULES; do
+    if modinfo -k "$kver" "$module" &>/dev/null; then
+      modules+=("$module")
+    else
+      printf 'Fan driver %s: not there, left out\n' "$module" >> "$LOG_FILE"
+    fi
+  done
+  (( ${#modules[@]} )) || return 0
+  { echo "# Managed by arch-setup (lib/gaming.sh): the motherboard fan chip's driver."
+    printf '%s\n' "${modules[@]}"; } | write_file /etc/modules-load.d/fans.conf
+  [[ " ${modules[*]} " != *' nct6687 '* ]] || options+=('blacklist nct6683')
+  [[ " ${modules[*]} " != *' it87 '* || " $FAN_PACKAGES " != *' it87-dkms-git '* ]] \
+    || options+=('options it87 ignore_resource_conflict=1')
+  (( ${#options[@]} )) || return 0
+  { echo '# Managed by arch-setup (lib/gaming.sh).'
+    printf '%s\n' "${options[@]}"; } | write_file /etc/modprobe.d/fans.conf
+}
+
 # ── The desktop ────────────────────────────────────────────────────────
 
 configure_gaming_desktop() {
@@ -169,4 +290,24 @@ EOF
   # No file indexing: Baloo crawling a Steam library's hundreds of
   # thousands of files is disk and CPU taken from the game.
   kwriteconfig6 --file baloofilerc --group 'Basic Settings' --key Indexing-Enabled false
+
+  configure_fan_drivers
+  # CoolerControl (EXTRA_PACKAGES): its service does the fan control, as
+  # root; the app only sets it up. On from the first boot, so the app finds
+  # it. Until a curve is set, every fan stays as the firmware has it.
+  enable_service coolercontrold
+  # LACT (GAMING_PACKAGES, on a real GPU) likewise: its service applies the
+  # graphics card's settings, the app sets them. Nothing changes until
+  # something is set. The card's fans in one of the two only, LACT or
+  # CoolerControl: both would be setting them.
+  if pacman -Q lact &>/dev/null; then
+    enable_service lactd
+  fi
+
+  # One machine's cooling settings for both, by its own script, when the
+  # repo has it (cooling/: it can go at any time). A failure there is only
+  # a warning: the fans run as the firmware has them.
+  if [[ -f $SETUP_DIR/cooling/cooling.sh ]]; then
+    run bash "$SETUP_DIR/cooling/cooling.sh" || warn "Couldn't apply this machine's cooling settings"
+  fi
 }

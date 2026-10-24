@@ -1,0 +1,23 @@
+version: 7
+daemon:
+  log_level: info
+  admin_group: wheel
+  disable_clocks_cleanup: false
+apply_settings_timer: 5
+gpus:
+  10DE:2705-1043:896B-0000:01:00.0:
+    fan_control_enabled: false
+profiles:
+  Stable Undervolt:
+    gpus:
+      10DE:2705-1043:896B-0000:01:00.0:
+        fan_control_enabled: false
+        power_mizer_mode: Auto
+        min_core_clock: 210
+        max_core_clock: 2760
+        gpu_clock_offsets:
+          0: 177
+        mem_clock_offsets:
+          0: 0
+current_profile: Stable Undervolt
+auto_switch_profiles: false
