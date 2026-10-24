@@ -146,11 +146,14 @@ add_kernel_option() {
 # Its menu hidden. Next to Windows (BESIDE_WINDOWS), on Windows' EFI
 # partition (/efi), as ARCHMAN, so it takes no other system's GRUB entry
 # there; without the copy, which would take the place of Windows' own
-# fallback; and with the menu (configure_grub_menu).
+# fallback; and with the menu (configure_grub_menu). With Windows' EFI
+# partition on another drive (OWN_ESP), /efi is ARCHMAN's own, and the copy
+# takes nobody's place.
 install_bootloader() {
   if (( ${BESIDE_WINDOWS:-0} )); then
     configure_grub_menu
     run grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=ARCHMAN
+    (( ! ${OWN_ESP:-0} )) || run grub-install --target=x86_64-efi --efi-directory=/efi --removable
   else
     set_grub_option GRUB_TIMEOUT 0
     set_grub_option GRUB_TIMEOUT_STYLE hidden
@@ -181,8 +184,8 @@ configure_grub_menu() {
   uuid=$(blkid -o value -s UUID "$WINDOWS_ESP") || die "Couldn't find Windows' boot partition for the boot menu."
   write_file /etc/grub.d/15_windows 755 <<EOF
 #!/bin/sh
-# Windows, started by its own boot manager on the EFI partition it shares
-# with ARCHMAN (by the ARCHMAN installer).
+# Windows, started by its own boot manager on its EFI partition, found by
+# its UUID on whichever drive it's on (by the ARCHMAN installer).
 cat << 'MENU'
 menuentry 'Windows' --class windows --id windows {
 	insmod part_gpt

@@ -58,22 +58,37 @@ manager there. The block has to hold the swap and at least `MIN_ROOT_SIZE`
 (30G) for the system and your files; when it's smaller, the screen says how
 much is needed and how to make room, and only offers to go back or to
 erase. Installing again takes the place of an earlier ARCHMAN next to
-Windows (its partitions, named "ARCHMAN Swap" and "ARCHMAN Root", count as
-free space), so an install that stopped halfway can simply be run again.
+Windows (its partitions, named "ARCHMAN Swap" and "ARCHMAN Root", and
+"ARCHMAN EFI" when it has one, count as free space), so an install that
+stopped halfway can simply be run again.
+
+On a PC with several drives, Windows Setup often puts Windows' EFI
+partition (its start-up files) on another drive than Windows itself: the
+first one the firmware lists. The drive menu shows Windows where Windows
+is, and that other drive as "· Windows' start-up files"; erasing it would
+leave Windows unable to start, and the review screen says so. Next to a
+Windows like that, ARCHMAN gets an EFI partition of its own (512M,
+`EFI_SIZE`) in the free block too, so the drive with the start-up files
+isn't touched; GRUB still starts Windows from there.
 
 At every start, GRUB's menu, in the ARCHMAN look, lists ARCHMAN Linux,
 Windows and the firmware's settings, and starts ARCHMAN after 5 seconds
 (`GRUB_MENU_TIMEOUT`). What makes it work:
 
-- Windows is found by its boot manager (`EFI/Microsoft/Boot/bootmgfw.efi`)
-  on an EFI system partition of a GPT drive, looked at read-only. A Windows
-  on an MBR drive starts the BIOS way, which this UEFI install can't start:
-  that drive only gets the erase option.
+- Windows is found by its folder (`Windows/System32`) on an NTFS
+  partition of a GPT drive, looked at read-only; with BitLocker on, by a
+  BitLocker partition next to Windows' boot manager or its recovery
+  partition. Its boot manager (`EFI/Microsoft/Boot/bootmgfw.efi`) is looked
+  for on every drive's EFI system partition: the one on Windows' drive, or
+  else another drive's. A Windows on an MBR drive starts the BIOS way, which
+  this UEFI install can't start: that drive only gets the erase option.
 - Windows' EFI partition is often 100 MB, too small for the kernels, so it's
   mounted on `/efi` and `/boot` stays on Btrfs, which GRUB reads. GRUB
   installs there as `ARCHMAN` (the firmware's boot menu shows it next to
   Windows Boot Manager), not as `GRUB`, which another Linux may use, and
-  without the copy at `EFI/BOOT/BOOTX64.EFI`, Windows' own fallback.
+  without the copy at `EFI/BOOT/BOOTX64.EFI`, Windows' own fallback. On
+  ARCHMAN's own EFI partition (Windows' on another drive), the same, with
+  that copy.
 - Windows' entry is `/etc/grub.d/15_windows`, which chainloads its boot
   manager by its EFI partition's UUID, so `grub-mkconfig` keeps it. No
   os-prober: it would only find the same Windows, after mounting every

@@ -51,10 +51,11 @@ TIME_LOCALE=${TIME_LOCALE:-auto}
 
 # ── Disk ───────────────────────────────────────────────────────────────
 # Layout is always: EFI, swap sized to RAM (so hibernation works), Btrfs root
-# with @ and @home subvolumes. Next to Windows (a drive with Windows' EFI
-# partition and free space beside it), only swap and root, in the largest
-# free block, all of it, and Windows' EFI partition as /efi; the block
-# must hold the swap and at least MIN_ROOT_SIZE (GiB) of root.
+# with @ and @home subvolumes. Next to Windows (a drive with Windows on it
+# and free space beside it), only swap and root, in the largest free block,
+# all of it, and Windows' EFI partition as /efi (an EFI partition of
+# ARCHMAN's own first, in that block, when Windows' is on another drive);
+# the block must hold them and at least MIN_ROOT_SIZE (GiB) of root.
 MIN_ROOT_SIZE=30
 # GRUB's menu, next to Windows (hidden otherwise): its seconds before it
 # starts the first entry, ARCHMAN, and its theme (assets/grub/archman,

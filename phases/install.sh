@@ -106,6 +106,7 @@ ask_questions() {
     else
       windows=''
       [[ -z $WINDOWS_ESP ]] || windows=', Windows included'
+      (( ! STARTUP_FILES )) || windows=", Windows' start-up files included: Windows, on another drive, won't start any more"
       warn "Everything on $DRIVE_LABEL will be erased$windows. This can't be undone."
       buttons '' 0 \
         "Go back" "Edit your answers. Your drive hasn't been touched yet." \
@@ -207,8 +208,8 @@ unmount_new_system() {
 
 # Left plugged in, the USB can win the boot order and start the installer
 # all over again. So the restart waits for the stick (USB, live_usb_disk's)
-# to be pulled out, or for Enter: for ISOs booted from a VM's virtual CD, or
-# with copytoram, where there's no USB to watch (USB empty), only Enter.
+# to be pulled out, or for Enter: for ISOs booted from a VM's virtual CD,
+# where there's no USB to watch (USB empty), only Enter.
 # restart_hint USB says which; wait_for_usb_removal USB waits. Not a typing
 # prompt: a plain message, and no cursor while it waits (the key pressed
 # isn't echoed).
@@ -228,14 +229,22 @@ wait_for_usb_removal() {
 # each shown by name and size, "CT1000P310SSD8 (931.5G)": its model, or its
 # device name when it reports none, and the device name too when two drives
 # would read the same; one with Windows on it says so, with the free space
-# next to it, "· Windows, 412G free". Sets DRIVE (/dev/...), DRIVE_LABEL
-# (without the Windows part) and WINDOWS_ESP (windows_esp's, or nothing).
+# next to it, "· Windows, 412G free". Windows' boot manager (windows_esp)
+# can be on another drive than Windows: Windows Setup puts it on the first
+# drive the firmware lists, Windows' or not. Windows then starts from that
+# one, and a drive with only the boot manager on it says so too, "·
+# Windows' start-up files": erased, Windows doesn't start any more. Sets
+# DRIVE (/dev/...), DRIVE_LABEL (without the Windows part), WINDOWS_ESP
+# (the boot manager's EFI partition, when Windows is on DRIVE; nothing
+# otherwise), OWN_ESP (1 when that partition is on another drive: next to
+# Windows, ARCHMAN then gets one of its own) and STARTUP_FILES (1 for a
+# drive with the boot manager and no Windows).
 select_drive() {
   local live_disk=''
   live_disk=$(live_usb_disk) || true
 
-  local -a paths labels items esps
-  local path size type model i j esp
+  local -a paths labels items esps boots
+  local path size type model i j esp boot=''
   while read -r path size type model; do
     [[ $type == disk && $path != "$live_disk" ]] || continue
     model=${model%%+([[:space:]])}
@@ -251,13 +260,24 @@ select_drive() {
       fi
     done
   done
+  # Each drive's boot manager, if it has one; boot, the first found, for a
+  # Windows on a drive without its own.
   for i in "${!paths[@]}"; do
     esp=$(windows_esp "${paths[i]}") || esp=''
+    boots+=("$esp")
+    [[ -n $boot ]] || boot=$esp
+  done
+  for i in "${!paths[@]}"; do
+    esp=''
+    if [[ -n $boot ]] && windows_on "${paths[i]}" "${boots[i]}"; then esp=${boots[i]:-$boot}; fi
     esps+=("$esp") items+=("${labels[i]}")
-    [[ -n $esp ]] || continue
-    free_space "${paths[i]}"
-    if (( FREE_BYTES >= 1 << 30 )); then items[i]+=" · Windows, $(size_label "$FREE_BYTES") free"
-    else items[i]+=" · Windows, no free space"; fi
+    if [[ -n $esp ]]; then
+      free_space "${paths[i]}"
+      if (( FREE_BYTES >= 1 << 30 )); then items[i]+=" · Windows, $(size_label "$FREE_BYTES") free"
+      else items[i]+=" · Windows, no free space"; fi
+    elif [[ -n ${boots[i]} ]]; then
+      items[i]+=" · Windows' start-up files"
+    fi
   done
 
   # The review screen that follows is the drive's second look. Esc returns
@@ -267,6 +287,9 @@ select_drive() {
   for i in "${!items[@]}"; do
     if [[ ${items[i]} == "$MENU_CHOICE" ]]; then
       DRIVE=${paths[i]} DRIVE_LABEL=${labels[i]} DRIVE_ITEM=${items[i]} WINDOWS_ESP=${esps[i]}
+      OWN_ESP=0 STARTUP_FILES=0
+      [[ -z ${esps[i]} || -n ${boots[i]} ]] || OWN_ESP=1
+      [[ -n ${esps[i]} || -z ${boots[i]} ]] || STARTUP_FILES=1
     fi
   done
   [[ -b $DRIVE ]] || die "$DRIVE_LABEL isn't there any more. Check it's connected."
@@ -275,15 +298,17 @@ select_drive() {
 # choose_install_space — for a drive with Windows on it (WINDOWS_ESP), the
 # Windows screen: install next to it, in free_space's block, or erase the
 # drive; BESIDE_WINDOWS 1 or 0 (always 0 on other drives). Next to Windows
-# only when the block holds the swap (as big as the RAM) and MIN_ROOT_SIZE
-# of root; otherwise how to make room, and Go back, which returns 1: the
-# drive list again. Asked again, it starts on the button picked before.
+# only when the block holds the swap (as big as the RAM), MIN_ROOT_SIZE of
+# root, and an EFI partition (OWN_ESP); otherwise how to make room, and Go
+# back, which returns 1: the drive list again. Asked again, it starts on
+# the button picked before.
 choose_install_space() {
   BESIDE_WINDOWS=0
   [[ -n $WINDOWS_ESP ]] || return 0
   free_space "$DRIVE"
-  local swap=$(( $(ram_mib) << 20 )) free earlier=''
-  local need=$(( swap + (MIN_ROOT_SIZE << 30) ))
+  local swap=$(( $(ram_mib) << 20 )) free earlier='' efi=0 startup=''
+  (( ! OWN_ESP )) || { efi=$(numfmt --from=iec "$EFI_SIZE"); startup=", $(size_label "$efi") to start it"; }
+  local need=$(( swap + (MIN_ROOT_SIZE << 30) + efi ))
   free=$(size_label "$FREE_BYTES")
   (( ! ${#OLD_PARTS[@]} )) || earlier=", the ARCHMAN installed there before included"
   local erase="Erase all of $DRIVE_LABEL, Windows included, and install ARCHMAN on the whole drive."
@@ -299,7 +324,7 @@ choose_install_space() {
     return 0
   fi
   if (( FREE_BYTES >= 1 << 30 )); then free="only $free of free space"; else free="no free space"; fi
-  centred_message "$C_TEXT" "$DRIVE_LABEL has Windows and $free next to it. ARCHMAN needs at least $(size_label "$need"): ${MIN_ROOT_SIZE}G for the system and your files, and $(size_label "$swap") for hibernation (this computer's memory)."
+  centred_message "$C_TEXT" "$DRIVE_LABEL has Windows and $free next to it. ARCHMAN needs at least $(size_label "$need"): ${MIN_ROOT_SIZE}G for the system and your files$startup, and $(size_label "$swap") for hibernation (this computer's memory)."
   echo
   centred_message "$C_SOFT" "To make room, shrink Windows' drive in Windows' Disk Management (right-click C: and choose Shrink Volume), then start this installer again."
   echo
@@ -332,10 +357,40 @@ windows_esp() {
   return 1
 }
 
+# windows_on DRIVE ESP — whether Windows is on DRIVE (a GPT one, as
+# windows_esp's): its folder (Windows/System32) on one of the NTFS
+# partitions, looked at read-only, as windows_esp does; or, with BitLocker
+# hiding them, a BitLocker partition next to Windows' boot manager (ESP,
+# DRIVE's windows_esp, or nothing) or its recovery partition, as Windows
+# Setup leaves its drive. Not a drive with only the boot manager on it.
+windows_on() {
+  [[ $(lsblk -dno PTTYPE "$1") == gpt ]] || return 1
+  local part type fstype look found locked=0 recovery=0 dir=/run/archman-windows
+  mkdir -p "$dir"
+  # (PARTTYPE before FSTYPE, which can be empty: read would shift it left.)
+  while read -r part type fstype; do
+    [[ $type != de94bba4-06d1-4d40-a16a-bfd50179d6ac ]] || recovery=1
+    [[ $fstype != BitLocker ]] || locked=1
+    [[ $fstype == ntfs ]] || continue
+    if ! look=$(findmnt -nfro TARGET -S "$part"); then
+      # A Windows that's hibernated, or shut down with Fast Startup, mounts
+      # read-only only; ntfs-3g when the kernel's driver refuses it anyway.
+      mount -o ro "$part" "$dir" 2>/dev/null || mount -t ntfs-3g -o ro "$part" "$dir" 2>/dev/null || continue
+      look=$dir
+    fi
+    found=0
+    [[ -d $look/Windows/System32 ]] && found=1
+    [[ $look != "$dir" ]] || umount "$dir"
+    (( found )) && return 0
+  done < <(lsblk -rnpo PATH,PARTTYPE,FSTYPE "$1")
+  (( locked && (recovery || ${#2}) ))
+}
+
 # Our partitions' names next to Windows: free_space counts them as free
 # space, so installing again (after an install that stopped, or over an
 # older ARCHMAN) takes their place rather than finding the free space gone.
-BESIDE_SWAP_NAME='ARCHMAN Swap' BESIDE_ROOT_NAME='ARCHMAN Root'
+# The EFI one only when Windows' boot manager is on another drive (OWN_ESP).
+BESIDE_EFI_NAME='ARCHMAN EFI' BESIDE_SWAP_NAME='ARCHMAN Swap' BESIDE_ROOT_NAME='ARCHMAN Root'
 
 # free_space DRIVE — the largest free block on a GPT drive, ARCHMAN's own
 # partitions (above) counted as free: FREE_FIRST and FREE_LAST, its first
@@ -357,7 +412,7 @@ free_space() {
         name=''
         [[ $line =~ name=\"([^\"]*)\" ]] && name=${BASH_REMATCH[1]}
         number=${line%% *} number=${number##*[!0-9]}
-        if [[ $name == "$BESIDE_SWAP_NAME" || $name == "$BESIDE_ROOT_NAME" ]]; then
+        if [[ $name == "$BESIDE_EFI_NAME" || $name == "$BESIDE_SWAP_NAME" || $name == "$BESIDE_ROOT_NAME" ]]; then
           OLD_PARTS+=("$number")
         else
           USED_PARTS+=("$number") spans+=("$start $(( start + size - 1 ))")
@@ -400,7 +455,8 @@ ram_mib() { echo $(( $(awk '/MemTotal/{print $2}' /proc/meminfo) / 1024 )); }
 # partition_and_mount — the drive's partitions, formatted and mounted on
 # /mnt: the whole drive's (partition_drive), or the free space's next to
 # Windows (partition_beside_windows), which leaves Windows' EFI partition as
-# it is, mounted on /efi. Either sets EFI_PART, SWAP_PART and ROOT_PART;
+# it is, mounted on /efi (or, on another drive, ARCHMAN's own, formatted
+# here). Either sets EFI_PART, SWAP_PART and ROOT_PART;
 # SWAP_PART is for hibernation too (the chroot phase): this partition, not
 # one found by its label, which another disk's older install may carry too.
 partition_and_mount() {
@@ -425,7 +481,7 @@ partition_and_mount() {
   run wipefs -a "$SWAP_PART" "$ROOT_PART"
 
   note "Setting up the file system..."
-  (( BESIDE_WINDOWS )) || run mkfs.fat -F32 -n BOOT "$EFI_PART"
+  (( BESIDE_WINDOWS && ! OWN_ESP )) || run mkfs.fat -F32 -n BOOT "$EFI_PART"
   run mkswap -L SWAP "$SWAP_PART"
   run mkfs.btrfs -f -L ROOT "$ROOT_PART"
 
@@ -456,26 +512,36 @@ partition_drive() {
 
 # partition_beside_windows RAM_MIB — swap (RAM_MIB) and root in free_space's
 # block, by its exact sectors (sgdisk's defaults would take the first free
-# space, which can be another, smaller one), with the two lowest partition
+# space, which can be another, smaller one), with the lowest partition
 # numbers no other partition has; an earlier ARCHMAN's partitions, part of
-# that block, deleted first. Nothing else on the drive is touched.
+# that block, deleted first. With Windows' boot manager on another drive
+# (OWN_ESP), an EFI partition of ARCHMAN's own first, so that drive isn't
+# touched either; otherwise Windows' EFI partition is ARCHMAN's too.
+# Nothing else on the drive is touched.
 partition_beside_windows() {
   free_space "$DRIVE"
-  local -a old=()
-  local n swap_number='' root_number='' swap_last
+  local -a old=() numbers=() parts=()
+  local n start=$FREE_FIRST end efi own=''
   for n in "${OLD_PARTS[@]}"; do old+=(-d "$n"); done
-  for (( n = 1; n <= 128; n++ )); do
-    [[ " ${USED_PARTS[*]} " != *" $n "* ]] || continue
-    if [[ -z $swap_number ]]; then swap_number=$n; else root_number=$n; break; fi
+  for (( n = 1; n <= 128 && ${#numbers[@]} < 3; n++ )); do
+    [[ " ${USED_PARTS[*]} " == *" $n "* ]] || numbers+=("$n")
   done
-  swap_last=$(( FREE_FIRST + ($1 << 20) / SECTOR_SIZE - 1 ))
-  printf 'Layout: next to Windows, in sectors %s-%s: %sM swap (= RAM, for hibernation), rest Btrfs; replaced: %s\n' \
-    "$FREE_FIRST" "$FREE_LAST" "$1" "${OLD_PARTS[*]:-nothing}" >> "$LOG_FILE"
+  EFI_PART=$WINDOWS_ESP
+  if (( OWN_ESP )); then
+    efi=$(numfmt --from=iec "$EFI_SIZE")
+    end=$(( start + efi / SECTOR_SIZE - 1 ))
+    parts+=(-n"${numbers[0]}:$start:$end" -t"${numbers[0]}":ef00 -c"${numbers[0]}:$BESIDE_EFI_NAME")
+    EFI_PART=$(partition_path "$DRIVE" "${numbers[0]}")
+    start=$(( end + 1 )) numbers=("${numbers[@]:1}") own="$EFI_SIZE EFI (Windows' is on another drive), "
+  fi
+  end=$(( start + ($1 << 20) / SECTOR_SIZE - 1 ))
+  parts+=(-n"${numbers[0]}:$start:$end"               -t"${numbers[0]}":8200 -c"${numbers[0]}:$BESIDE_SWAP_NAME"
+          -n"${numbers[1]}:$(( end + 1 )):$FREE_LAST" -t"${numbers[1]}":8300 -c"${numbers[1]}:$BESIDE_ROOT_NAME")
+  printf 'Layout: next to Windows, in sectors %s-%s: %s%sM swap (= RAM, for hibernation), rest Btrfs; replaced: %s\n' \
+    "$FREE_FIRST" "$FREE_LAST" "$own" "$1" "${OLD_PARTS[*]:-nothing}" >> "$LOG_FILE"
   (( ! ${#old[@]} )) || run sgdisk "${old[@]}" "$DRIVE"
-  run sgdisk \
-    -n"$swap_number:$FREE_FIRST:$swap_last"           -t"$swap_number":8200 -c"$swap_number:$BESIDE_SWAP_NAME" \
-    -n"$root_number:$(( swap_last + 1 )):$FREE_LAST"   -t"$root_number":8300 -c"$root_number:$BESIDE_ROOT_NAME" "$DRIVE"
-  EFI_PART=$WINDOWS_ESP SWAP_PART=$(partition_path "$DRIVE" "$swap_number") ROOT_PART=$(partition_path "$DRIVE" "$root_number")
+  run sgdisk "${parts[@]}" "$DRIVE"
+  SWAP_PART=$(partition_path "$DRIVE" "${numbers[0]}") ROOT_PART=$(partition_path "$DRIVE" "${numbers[1]}")
 }
 
 # Ranks the mirrors pacstrap downloads from: the fastest in our country;
@@ -582,22 +648,33 @@ configure_new_system() {
   screen_env
   arch-chroot /mnt env HOST_NAME="$HOST_NAME" USER_NAME="$USER_NAME" TIMEZONE="$TIMEZONE" TIME_LOCALE="$TIME_LOCALE" \
     KEYMAP="$KEYMAP" X11_LAYOUT="$X11_LAYOUT" X11_VARIANT="$X11_VARIANT" X11_OPTIONS="$X11_OPTIONS" \
-    SWAP_PART="$SWAP_PART" BESIDE_WINDOWS="$BESIDE_WINDOWS" WINDOWS_ESP="$WINDOWS_ESP" FAN_MODULES="$FAN_MODULES" FAN_PACKAGES="$FAN_PACKAGES" "${SCREEN_ENV[@]}" \
+    SWAP_PART="$SWAP_PART" BESIDE_WINDOWS="$BESIDE_WINDOWS" WINDOWS_ESP="$WINDOWS_ESP" OWN_ESP="$OWN_ESP" FAN_MODULES="$FAN_MODULES" FAN_PACKAGES="$FAN_PACKAGES" "${SCREEN_ENV[@]}" \
     bash "$CHROOT_SETUP_DIR/setup.sh" chroot
   # The desktop phase has done every step, and logged the last one's time: the
   # screens that follow show the bar full.
   progress_full
 }
 
-# Prints the disk the live ISO booted from (/dev/sdX), if it's still mounted.
-# The disk under what's mounted, by walking down from it (lsblk -s): a USB
-# written with the ISO is mounted whole (/dev/sdb, its filesystem starts at
-# the stick's first byte), where a partition's parent (PKNAME) is nothing;
-# others mount a partition, or a device-mapper one over it (Ventoy). A VM's
-# virtual CD is a rom, not a disk: nothing, as there's nothing to unplug.
+# Prints the disk the live ISO booted from (/dev/sdX). Where it's mounted,
+# or, once the ISO has copied itself to RAM and let go of it (copytoram,
+# archiso's default with memory to spare: the image and 2 GiB more), the
+# device with the ISO's UUID, which the boot found it by
+# (archisosearchuuid). The disk under it, by walking down from it
+# (lsblk -s): a USB written with the ISO is mounted whole (/dev/sdb, its
+# filesystem starts at the stick's first byte), where a partition's parent
+# (PKNAME) is nothing; others mount a partition, or a device-mapper one over
+# it (Ventoy). A VM's virtual CD is a rom, not a disk: nothing, as there's
+# nothing to unplug.
 live_usb_disk() {
-  local source name type
-  source=$(findmnt -no SOURCE /run/archiso/bootmnt 2>/dev/null) || return 1
+  local source='' name type uuid path id
+  if ! source=$(findmnt -no SOURCE /run/archiso/bootmnt 2>/dev/null); then
+    [[ $(< /proc/cmdline) =~ archisosearchuuid=([^ ]+) ]] || return 1
+    uuid=${BASH_REMATCH[1]} source=''
+    while read -r path id; do
+      [[ $id == "$uuid" ]] && { source=$path; break; }
+    done < <(lsblk -rnpo PATH,UUID)
+    [[ -n $source ]] || return 1
+  fi
   while read -r name type; do
     [[ $type == disk ]] && { echo "/dev/$name"; return 0; }
   done < <(lsblk -nrso NAME,TYPE "$source" 2>/dev/null)
