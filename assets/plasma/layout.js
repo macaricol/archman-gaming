@@ -70,7 +70,9 @@ panel.widgets("org.kde.plasma.showdesktop").forEach(function (w) { w.remove(); }
 
 // Apdatifier (installed by install_plasmoids), just before the tray:
 // updates counted in a badge, the AUR's too, through paru
-// (installed by the desktop phase), upgrades run in Konsole.
+// (installed by the desktop phase), upgrades run in Konsole. No check while
+// offline (checkConn): one at wake-up, before the network is back, ended
+// in an error notification ("Connection reset by peer" from the AUR).
 var apd = panel.addWidget("com.github.exequtic.apdatifier");
 if (apd) {
   apd.currentConfigGroup = [];
@@ -78,6 +80,7 @@ if (apd) {
   apd.writeConfig("popupHeight", 400);
   apd.currentConfigGroup = ["General"];
   apd.writeConfig("aur", true);
+  apd.writeConfig("checkConn", true);
   apd.currentConfigGroup = ["Upgrade"];
   apd.writeConfig("wrapper", "paru");
   apd.writeConfig("terminal", "/usr/bin/konsole");
